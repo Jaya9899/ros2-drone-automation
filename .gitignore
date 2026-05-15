@@ -1,3 +1,5 @@
 depthai-ros/
 vision_opencv/
 .vscode/
+.vscode/
+*.db
