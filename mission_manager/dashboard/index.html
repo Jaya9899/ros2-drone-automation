@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aerothon UAS — Mission Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0a0e17;
+      color: #e0e6ed;
+      overflow: hidden;
+      height: 100vh;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 100%);
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #21262d;
+    }
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      background: linear-gradient(90deg, #58a6ff, #3fb950);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .header .conn-status {
+      font-size: 12px;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-weight: 500;
+    }
+    .conn-status.connected { background: #0d4429; color: #3fb950; }
+    .conn-status.disconnected { background: #4a1520; color: #f85149; }
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      height: calc(100vh - 48px);
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #0d1117;
+    }
+    .sidebar {
+      background: #161b22;
+      border-left: 1px solid #21262d;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card {
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #8b949e;
+      margin-bottom: 8px;
+    }
+    .state-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-align: center;
+      width: 100%;
+    }
+    .state-IDLE { background: #1c2333; color: #8b949e; }
+    .state-TAKEOFF, .state-SCAN_REFERENCE_QR { background: #0c2d6b; color: #58a6ff; }
+    .state-CORRIDOR_1_TRANSIT, .state-CORRIDOR_2_TRANSIT { background: #2a1a00; color: #d29922; }
+    .state-ARENA_SEARCH { background: #0d3520; color: #3fb950; }
+    .state-TARGET_FOUND, .state-NAVIGATE_TO_DROP { background: #3d1d6e; color: #bc8cff; }
+    .state-DROPPING { background: #5a1e02; color: #f0883e; }
+    .state-HOMING { background: #0c2d6b; color: #58a6ff; }
+    .state-LANDED { background: #0d4429; color: #3fb950; }
+    .state-RC_MODE { background: #4a1520; color: #f85149; }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .metric {
+      display: flex;
+      flex-direction: column;
+    }
+    .metric-label {
+      font-size: 10px;
+      color: #6e7681;
+      text-transform: uppercase;
+    }
+    .metric-value {
+      font-size: 18px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-unit {
+      font-size: 11px;
+      color: #6e7681;
+      font-weight: 400;
+    }
+    .battery-bar {
+      height: 6px;
+      border-radius: 3px;
+      background: #21262d;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .battery-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s, background 0.5s;
+    }
+    .attitude-display {
+      display: flex;
+      justify-content: space-around;
+      text-align: center;
+    }
+    .att-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .att-value {
+      font-size: 20px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .att-label {
+      font-size: 10px;
+      color: #6e7681;
+      text-transform: uppercase;
+    }
+    .log-area {
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      background: #010409;
+      border: 1px solid #21262d;
+      border-radius: 6px;
+      padding: 8px;
+      max-height: 140px;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
+    .log-entry {
+      color: #8b949e;
+    }
+    .log-entry.alert {
+      color: #f85149;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🛩 Aerothon UAS — Mission Dashboard</h1>
+    <span id="connStatus" class="conn-status disconnected">● Disconnected</span>
+  </div>
+  <div class="main">
+    <div id="map"></div>
+    <div class="sidebar">
+      <!-- Mission State -->
+      <div class="card">
+        <div class="card-title">Mission State</div>
+        <div id="stateBadge" class="state-badge state-IDLE">IDLE</div>
+      </div>
+      <!-- GPS -->
+      <div class="card">
+        <div class="card-title">Position</div>
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="metric-label">Latitude</span>
+            <span id="lat" class="metric-value">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Longitude</span>
+            <span id="lon" class="metric-value">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Altitude (GPS)</span>
+            <span id="altGps" class="metric-value">— <span class="metric-unit">m</span></span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Altitude (Local)</span>
+            <span id="altLocal" class="metric-value">— <span class="metric-unit">m</span></span>
+          </div>
+        </div>
+      </div>
+      <!-- Velocity -->
+      <div class="card">
+        <div class="card-title">Velocity</div>
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="metric-label">Speed</span>
+            <span id="speed" class="metric-value">— <span class="metric-unit">m/s</span></span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Vz</span>
+            <span id="vz" class="metric-value">— <span class="metric-unit">m/s</span></span>
+          </div>
+        </div>
+      </div>
+      <!-- Attitude -->
+      <div class="card">
+        <div class="card-title">Attitude</div>
+        <div class="attitude-display">
+          <div class="att-item">
+            <span id="roll" class="att-value">—</span>
+            <span class="att-label">Roll °</span>
+          </div>
+          <div class="att-item">
+            <span id="pitch" class="att-value">—</span>
+            <span class="att-label">Pitch °</span>
+          </div>
+          <div class="att-item">
+            <span id="yaw" class="att-value">—</span>
+            <span class="att-label">Yaw °</span>
+          </div>
+        </div>
+      </div>
+      <!-- Battery -->
+      <div class="card">
+        <div class="card-title">Battery</div>
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="metric-label">Voltage</span>
+            <span id="battV" class="metric-value">— <span class="metric-unit">V</span></span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Remaining</span>
+            <span id="battPct" class="metric-value">—<span class="metric-unit">%</span></span>
+          </div>
+        </div>
+        <div class="battery-bar">
+          <div id="battBar" class="battery-fill" style="width:0%; background:#3fb950;"></div>
+        </div>
+      </div>
+      <!-- Event Log -->
+      <div class="card" style="flex:1;">
+        <div class="card-title">Event Log</div>
+        <div id="logArea" class="log-area"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/eventsource-polyfill@1.0.31/src/eventsource.min.js"></script>
+  <script>
+    // ── Map setup ─────────────────────────────────────────────
+    const map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 22, attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const droneIcon = L.divIcon({
+      html: '<div style="font-size:28px;text-shadow:0 0 8px #58a6ff;">✈</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14], className: '',
+    });
+    const droneMarker = L.marker([12.9716, 77.5946], { icon: droneIcon }).addTo(map);
+    const trail = L.polyline([], { color: '#58a6ff', weight: 2, opacity: 0.6 }).addTo(map);
+
+    // ── Dashboard state ───────────────────────────────────────
+    let lastState = '';
+    const logArea = document.getElementById('logArea');
+
+    function addLog(text, isAlert = false) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry' + (isAlert ? ' alert' : '');
+      const now = new Date().toLocaleTimeString();
+      entry.textContent = `[${now}] ${text}`;
+      logArea.appendChild(entry);
+      logArea.scrollTop = logArea.scrollHeight;
+      // Keep max 50 entries
+      while (logArea.children.length > 50) logArea.removeChild(logArea.firstChild);
+    }
+
+    function updateDashboard(data) {
+      // State
+      const state = data.mission_state || 'UNKNOWN';
+      const badge = document.getElementById('stateBadge');
+      badge.textContent = state;
+      badge.className = 'state-badge state-' + state;
+      if (state !== lastState) {
+        addLog(`State → ${state}`);
+        lastState = state;
+      }
+
+      // GPS
+      if (data.gps) {
+        document.getElementById('lat').textContent = data.gps.lat.toFixed(7);
+        document.getElementById('lon').textContent = data.gps.lon.toFixed(7);
+        document.getElementById('altGps').innerHTML =
+          data.gps.alt.toFixed(1) + ' <span class="metric-unit">m</span>';
+
+        if (data.gps.lat !== 0 && data.gps.lon !== 0) {
+          const pos = [data.gps.lat, data.gps.lon];
+          droneMarker.setLatLng(pos);
+          trail.addLatLng(pos);
+          map.panTo(pos);
+        }
+      }
+      document.getElementById('altLocal').innerHTML =
+        (data.local_alt || 0).toFixed(1) + ' <span class="metric-unit">m</span>';
+
+      // Velocity
+      if (data.velocity) {
+        document.getElementById('speed').innerHTML =
+          data.velocity.speed.toFixed(1) + ' <span class="metric-unit">m/s</span>';
+        document.getElementById('vz').innerHTML =
+          data.velocity.vz.toFixed(1) + ' <span class="metric-unit">m/s</span>';
+      }
+
+      // Attitude
+      if (data.attitude) {
+        document.getElementById('roll').textContent = data.attitude.roll.toFixed(1);
+        document.getElementById('pitch').textContent = data.attitude.pitch.toFixed(1);
+        document.getElementById('yaw').textContent = data.attitude.yaw.toFixed(1);
+      }
+
+      // Battery
+      if (data.battery) {
+        document.getElementById('battV').innerHTML =
+          data.battery.voltage.toFixed(1) + ' <span class="metric-unit">V</span>';
+        const pct = data.battery.percentage >= 0 ? data.battery.percentage * 100 : -1;
+        document.getElementById('battPct').innerHTML =
+          (pct >= 0 ? pct.toFixed(0) : '—') + '<span class="metric-unit">%</span>';
+        const bar = document.getElementById('battBar');
+        const w = pct >= 0 ? pct : 0;
+        bar.style.width = w + '%';
+        bar.style.background = w > 30 ? '#3fb950' : w > 15 ? '#d29922' : '#f85149';
+      }
+    }
+
+    // ── Connection: rosbridge websocket ───────────────────────
+    // Requires: ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+    const WS_URL = 'ws://' + (location.hostname || 'localhost') + ':9090';
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connect() {
+      const status = document.getElementById('connStatus');
+      try {
+        ws = new WebSocket(WS_URL);
+      } catch (e) {
+        status.textContent = '● Disconnected';
+        status.className = 'conn-status disconnected';
+        scheduleReconnect();
+        return;
+      }
+
+      ws.onopen = () => {
+        status.textContent = '● Connected';
+        status.className = 'conn-status connected';
+        addLog('Connected to rosbridge');
+        // Subscribe to /telemetry/combined
+        ws.send(JSON.stringify({
+          op: 'subscribe', topic: '/telemetry/combined',
+          type: 'std_msgs/msg/String',
+        }));
+        // Subscribe to /safety/alert
+        ws.send(JSON.stringify({
+          op: 'subscribe', topic: '/safety/alert',
+          type: 'std_msgs/msg/String',
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const envelope = JSON.parse(event.data);
+          if (envelope.topic === '/telemetry/combined') {
+            const data = JSON.parse(envelope.msg.data);
+            updateDashboard(data);
+          } else if (envelope.topic === '/safety/alert') {
+            addLog(envelope.msg.data, true);
+          }
+        } catch (e) { /* ignore parse errors */ }
+      };
+
+      ws.onclose = () => {
+        status.textContent = '● Disconnected';
+        status.className = 'conn-status disconnected';
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 3000);
+    }
+
+    // Start connection
+    connect();
+  </script>
+</body>
+</html>

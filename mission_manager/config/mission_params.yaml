@@ -1,0 +1,155 @@
+# mission_params.yaml — Central configuration for Mission 2
+#
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  UPDATE THESE ON COMPETITION DAY:                                ║
+# ║    - origin_lat / origin_lon  (GPS origin of the arena)          ║
+# ║    - geofence_points          (arena boundary GPS polygon)       ║
+# ║    - red_zone_x / red_zone_y  (no-fly zone vertices)            ║
+# ║    - corridor_waypoints_x/y   (if arena layout changes)         ║
+# ║    - qr_content / qr_location (SITL QR simulator targets)       ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+
+# ─── Mission Node ─────────────────────────────────────────────────
+mission_node:
+  ros__parameters:
+    # Arena & Course
+    corridor_length_m: 10.0
+    corridor_width_m: 3.5
+    corridor_height_m: 3.048
+    arena_width_m: 40.0
+    arena_height_m: 30.0
+    # Altitudes
+    drop_altitude_m: 5.0
+    cruise_altitude_m: 5.0
+    # Speeds
+    corridor_speed_ms: 2.0
+    corridor_obs_speed_ms: 1.0
+    arena_speed_ms: 1.5
+    # GPS Origin
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    # Camera
+    oak_hfov_deg: 62.2
+    oak_warning_dist_m: 1.5
+    strip_overlap: 0.80
+    # Battery
+    battery_critical_v: 10.0
+    battery_warning_v: 14.0
+    # Timeouts
+    service_timeout_s: 10.0
+    altitude_timeout_s: 30.0
+    altitude_tolerance_m: 0.5
+    arrival_tolerance_m: 1.5
+    arrival_timeout_s: 60.0
+    goto_publish_count: 5
+    # Mission-specific
+    tick_rate_hz: 2.0
+    auto_start: true
+    rc_auto_channel: 5
+    rc_auto_pwm_thresh: 1500
+    qr_fallback_id: "QR_TARGET_DEMO_ID"
+
+# ─── Safety Monitor ──────────────────────────────────────────────
+safety_monitor:
+  ros__parameters:
+    # Battery
+    battery_critical_v: 10.0
+    battery_warning_v: 14.0
+    # Camera
+    oak_warning_dist_m: 1.5
+    # GPS Origin
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    # Safety
+    safety_check_rate_hz: 5.0
+    pointcloud_noise_min_m: 0.3
+    obstacle_warn_throttle_s: 1.0
+    # Geofence polygon (flat list: lat0,lon0, lat1,lon1, ...)
+    geofence_points: [12.97100, 77.59400, 12.97100, 77.59500,
+                      12.97220, 77.59500, 12.97220, 77.59400]
+    fence_enable: 1
+    fence_type: 7
+    fence_action: 1
+    fence_alt_max: 15.0
+    fence_radius: 100.0
+
+# ─── Path Planner ─────────────────────────────────────────────────
+path_planner_node:
+  ros__parameters:
+    # Arena & Course
+    corridor_length_m: 10.0
+    corridor_width_m: 3.5
+    corridor_height_m: 3.048
+    arena_width_m: 40.0
+    arena_height_m: 30.0
+    # Altitudes
+    drop_altitude_m: 5.0
+    cruise_altitude_m: 5.0
+    # Speeds
+    corridor_speed_ms: 2.0
+    corridor_obs_speed_ms: 1.0
+    arena_speed_ms: 1.5
+    # GPS Origin
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    # Camera
+    oak_hfov_deg: 62.2
+    oak_warning_dist_m: 1.5
+    strip_overlap: 0.80
+    # Timeouts
+    service_timeout_s: 10.0
+    altitude_timeout_s: 30.0
+    altitude_tolerance_m: 0.5
+    arrival_tolerance_m: 1.5
+    arrival_timeout_s: 60.0
+    goto_publish_count: 5
+    # Path planner specific
+    use_nav2: true
+    corridor_waypoints_x: [0.0, 2.5, 5.0, 7.5, 10.0]
+    corridor_waypoints_y: [15.0, 15.0, 15.0, 15.0, 15.0]
+    red_zone_x: [24.0, 36.0, 36.0, 24.0]
+    red_zone_y: [12.0, 12.0, 22.0, 22.0]
+    red_zone_buffer_m: 0.5
+    corridor_entry_x: 0.0
+    corridor_entry_y: 15.0
+    corridor_timeout_s: 120.0
+    lawnmower_timeout_s: 600.0
+    nav2_connect_timeout_s: 10.0
+    mavros_arrival_tolerance_m: 2.0
+
+# ─── Payload Node ─────────────────────────────────────────────────
+payload_node:
+  ros__parameters:
+    # Timeouts
+    service_timeout_s: 10.0
+    altitude_timeout_s: 30.0
+    altitude_tolerance_m: 0.5
+    arrival_tolerance_m: 1.5
+    arrival_timeout_s: 60.0
+    goto_publish_count: 5
+    # Payload specific
+    winch_channel: 9
+    release_channel: 10
+    winch_pwm_lower: 1100
+    winch_pwm_stop: 1500
+    release_pwm_open: 1100
+    release_pwm_lock: 1900
+    lower_duration_s: 5.0
+    contact_timeout_s: 15.0
+    release_pause_s: 1.0
+
+# ─── Telemetry Node ───────────────────────────────────────────────
+telemetry_node:
+  ros__parameters:
+    publish_rate_hz: 2.0
+    tick_rate_hz: 2.0
+
+# ─── SITL QR Simulator ───────────────────────────────────────────
+sitl_qr_simulator:
+  ros__parameters:
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    qr_location_lat: 12.9718
+    qr_location_lon: 77.5948
+    qr_content: "QR_TARGET_DEMO_ID"
+    detection_radius_m: 5.0
