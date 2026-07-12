@@ -3,3 +3,31 @@ vision_opencv/
 .vscode/
 .vscode/
 *.db
+
+# SITL runtime artifacts
+eeprom.bin
+mav.parm
+mav.tlog
+mav.tlog.raw
+*.tlog
+*.tlog.raw
+
+# Python
+__pycache__/
+*.pyc
+
+# SITL runtime artifacts
+eeprom.bin
+mav.parm
+mav.tlog
+mav.tlog.raw
+*.tlog
+*.tlog.raw
+terrain/
+
+# Python
+__pycache__/
+*.pyc
+
+# Organizer material (not our code)
+AeroTHON-main/

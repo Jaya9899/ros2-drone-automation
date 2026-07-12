@@ -1,0 +1,43 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Value: true
+      Cell Size: 5
+      Line Style:
+        Value: Lines
+      Color: 40; 40; 50
+      Plane Cell Count: 20
+    - Class: rviz_default_plugins/Path
+      Name: BCD Planned Path
+      Topic:
+        Value: /bcd/path
+      Color: 33; 150; 243
+      Line Style: Lines
+      Line Width: 0.05
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Name: Drone Trail
+      Topic:
+        Value: /bcd/trail
+      Color: 0; 230; 118
+      Line Style: Lines
+      Line Width: 0.08
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Arena Markers
+      Topic:
+        Value: /bcd/markers
+      Value: true
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      X: 20
+      Y: 15
+      Scale: 15

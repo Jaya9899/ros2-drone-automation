@@ -1,0 +1,38 @@
+qr_scanner_node:
+  ros__parameters:
+
+    # Confirmation gate — number of consecutive identical frames required
+    gate_required: 3
+
+    # Minimum quad confidence to enter gate (0.0 to 1.0)
+    # Detections below this are rejected before reaching the gate
+    min_confidence: 0.5
+
+    # Confidence threshold to trigger movement stop (Phase 5 only)
+    # When any detection exceeds this, /qr_scanner/stop_move = True is published
+    stop_confidence: 0.7
+
+    # Nominal delivery zone hover altitude in metres
+    # Used for NED projection when /vehicle_state altitude is unavailable
+    delivery_altitude: 10.0
+
+    # ── Camera intrinsics ────────────────────────────────────────────────────
+    # These are approximate values for RPi Camera Module 3 at 1280x720.
+    # Replace with values from your actual camera calibration.
+    # To calibrate: ros2 run camera_calibration cameracalibrator
+    #   --size 8x6 --square 0.025 image:=/down_frame
+
+    # Focal length in pixels
+    camera_fx: 920.0
+    camera_fy: 920.0
+
+    # Principal point (optical centre) in pixels
+    # Approximately frame_width/2 and frame_height/2 for uncalibrated cameras
+    camera_cx: 640.0
+    camera_cy: 360.0
+
+    # ── Simulation overrides ─────────────────────────────────────────────────
+    # When running in Gazebo, replace camera_fx/fy/cx/cy with values
+    # from the Gazebo camera plugin config (hfov, image_width, image_height).
+    # Formula: fx = (image_width / 2) / tan(hfov / 2)
+    # Example for 80 deg HFOV at 1280px: fx = 640 / tan(40 deg) = 763.0
