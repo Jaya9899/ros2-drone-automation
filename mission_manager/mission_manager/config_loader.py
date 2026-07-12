@@ -69,6 +69,10 @@ def load_mission_config(node) -> MissionConfig:
     # ── Battery ──────────────────────────────────────────────────
     cfg.battery_critical_v    = _declare(node, "battery_critical_v", 10.0)
     cfg.battery_warning_v     = _declare(node, "battery_warning_v", 14.0)
+    cfg.battery_capacity_mah  = _declare(node, "battery_capacity_mah", 5200.0)
+    cfg.battery_cells         = _declare(node, "battery_cells", 4)
+    cfg.nominal_voltage_v     = _declare(node, "nominal_voltage_v", 14.8)
+    cfg.auw_grams             = _declare(node, "auw_grams", 1950.0)
 
     # ── Timeouts & Tolerances ────────────────────────────────────
     cfg.service_timeout_s     = _declare(node, "service_timeout_s", 10.0)
@@ -93,11 +97,15 @@ def load_mission_config(node) -> MissionConfig:
     # ── Path Planner Specific ────────────────────────────────────
     cfg.corridor_timeout_s          = _declare(node, "corridor_timeout_s", 120.0)
     cfg.lawnmower_timeout_s         = _declare(node, "lawnmower_timeout_s", 600.0)
-    cfg.nav2_connect_timeout_s      = _declare(node, "nav2_connect_timeout_s", 10.0)
     cfg.mavros_arrival_tolerance_m  = _declare(node, "mavros_arrival_tolerance_m", 2.0)
     cfg.corridor_entry_x            = _declare(node, "corridor_entry_x", 0.0)
     cfg.corridor_entry_y            = _declare(node, "corridor_entry_y", 15.0)
     cfg.red_zone_buffer_m           = _declare(node, "red_zone_buffer_m", 0.5)
+
+    # ── RL Obstacle Avoidance (placeholder) ──────────────────────
+    cfg.use_rl_avoidance  = _declare(node, "use_rl_avoidance", False)
+    cfg.rl_model_path     = _declare(node, "rl_model_path", "")
+    cfg.rl_sensor_topic   = _declare(node, "rl_sensor_topic", "/oak/points")
 
     # ── Payload Specific ─────────────────────────────────────────
     cfg.winch_channel       = _declare(node, "winch_channel", 9)

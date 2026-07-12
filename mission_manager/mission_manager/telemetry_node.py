@@ -11,6 +11,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from std_msgs.msg import String
 from sensor_msgs.msg import BatteryState, NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -22,6 +23,15 @@ class TelemetryNode(Node):
     def __init__(self):
         super().__init__("telemetry_node")
         self.cfg = load_mission_config(self)
+
+        # QoS profile for high-frequency telemetry / sensors
+        # MAVROS often publishes these as BEST_EFFORT
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
 
         # ── Telemetry state ──────────────────────────────────────
         self._lat = 0.0
@@ -44,23 +54,23 @@ class TelemetryNode(Node):
         # ── Subscribers ──────────────────────────────────────────
         self.create_subscription(
             NavSatFix, "/mavros/global_position/global",
-            self._gps_cb, 10,
+            self._gps_cb, sensor_qos,
         )
         self.create_subscription(
             PoseStamped, "/mavros/local_position/pose",
-            self._pose_cb, 10,
+            self._pose_cb, sensor_qos,
         )
         self.create_subscription(
             Imu, "/mavros/imu/data",
-            self._imu_cb, 10,
+            self._imu_cb, sensor_qos,
         )
         self.create_subscription(
             TwistStamped, "/mavros/local_position/velocity_local",
-            self._vel_cb, 10,
+            self._vel_cb, sensor_qos,
         )
         self.create_subscription(
             BatteryState, "/mavros/battery",
-            self._battery_cb, 10,
+            self._battery_cb, sensor_qos,
         )
         self.create_subscription(
             String, "/mission/status",

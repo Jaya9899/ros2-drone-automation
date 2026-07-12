@@ -15,14 +15,32 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
+from mavros_msgs.msg import State
+from sensor_msgs.msg import NavSatFix
 from geometry_msgs.msg import PoseStamped
+
+# QoS profile for high-frequency telemetry / sensors
+# MAVROS often publishes these as BEST_EFFORT
+sensor_qos = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10
+)
 
 
 def _call_service(node: Node, srv_type, srv_name: str, request,
                   timeout: float = 10.0):
-    """Create a client, wait for the service, call it synchronously, return result."""
+    """Create a client, wait for the service, call it synchronously, return result.
+
+    Uses poll-based wait instead of spin_until_future_complete so it is
+    safe to call from a background thread while the main thread spins.
+    """
+    import time
+
     client = node.create_client(srv_type, srv_name)
 
     if not client.wait_for_service(timeout_sec=timeout):
@@ -30,7 +48,11 @@ def _call_service(node: Node, srv_type, srv_name: str, request,
         return None
 
     future = client.call_async(request)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
+
+    # Poll-based wait — safe when main thread already spins the node
+    deadline = time.time() + timeout
+    while not future.done() and time.time() < deadline:
+        time.sleep(0.05)
 
     if future.result() is None:
         node.get_logger().error(f"Service call to {srv_name} failed (no result)")
@@ -122,7 +144,7 @@ def wait_for_altitude(
         PoseStamped,
         "/mavros/local_position/pose",
         _pose_cb,
-        10,
+        sensor_qos,
     )
 
     deadline = time.time() + timeout
@@ -209,6 +231,8 @@ def goto(
     from mavros_msgs.msg import GlobalPositionTarget
     from std_msgs.msg import Header
 
+    import time as _time
+
     pub = node.create_publisher(
         GlobalPositionTarget,
         "/mavros/setpoint_position/global",
@@ -233,10 +257,11 @@ def goto(
     msg.altitude = altitude_m
 
     # Publish a few times to make sure the FCU accepts it
+    # Use time.sleep instead of spin_once — safe from background threads
     for _ in range(publish_count):
         msg.header.stamp = node.get_clock().now().to_msg()
         pub.publish(msg)
-        rclpy.spin_once(node, timeout_sec=0.1)
+        _time.sleep(0.1)
 
     node.get_logger().info(
         f"[mavros_utils] Goto command sent: lat={lat:.7f}, lon={lon:.7f}, "
@@ -288,7 +313,7 @@ def wait_for_arrival(
         NavSatFix,
         "/mavros/global_position/global",
         _gps_cb,
-        10,
+        sensor_qos,
     )
 
     deadline = time.time() + timeout
@@ -324,7 +349,7 @@ def wait_for_ready(node: Node, timeout: float = 30.0) -> bool:
         if msg.connected and msg.system_status == 3:
             ready = True
 
-    sub = node.create_subscription(State, "/mavros/state", _state_cb, 10)
+    sub = node.create_subscription(State, "/mavros/state", _state_cb, sensor_qos)
 
     deadline = time.time() + timeout
     while not ready and time.time() < deadline:
@@ -364,7 +389,7 @@ def get_current_gps(
         NavSatFix,
         "/mavros/global_position/global",
         _cb,
-        10,
+        sensor_qos,
     )
 
     deadline = time.time() + timeout

@@ -12,6 +12,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from std_msgs.msg import Float32, String, Bool
 from sensor_msgs.msg import BatteryState, PointCloud2
 from mavros_msgs.srv import SetMode
@@ -28,6 +29,15 @@ class SafetyMonitor(Node):
 
         # ----- Load config -----
         self.cfg = load_mission_config(self)
+
+        # QoS profile for high-frequency telemetry / sensors
+        # MAVROS often publishes these as BEST_EFFORT
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
 
         # ----- Geofence points (flat list → list of (lat, lon) tuples) -----
         try:
@@ -77,7 +87,7 @@ class SafetyMonitor(Node):
         # ----- Subscribers -----
         self.create_subscription(
             BatteryState, "/mavros/battery",
-            self._battery_cb, 10,
+            self._battery_cb, sensor_qos,
         )
 
         # OAK-D depth pointcloud

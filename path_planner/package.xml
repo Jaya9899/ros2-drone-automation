@@ -12,7 +12,6 @@
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>
   <depend>geographic_msgs</depend>
-  <depend>nav2_msgs</depend>
   <depend>mavros_msgs</depend>
   <depend>mission_manager</depend>
 

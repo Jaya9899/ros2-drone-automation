@@ -23,8 +23,12 @@ ARENA_SPEED_MS  = 1.5
 CORRIDOR_ENTRY_X = 0.0       # left edge of arena
 CORRIDOR_ENTRY_Y = 15.0      # approximately centre height
 
-# Default red zone (will be updated on competition day)
-DEFAULT_RED_ZONE = [(24, 12), (36, 12), (36, 22), (24, 22)]
+# Default red zones (will be updated on competition day)
+DEFAULT_RED_ZONES = [
+    [(24, 12), (36, 12), (36, 22), (24, 22)],          # Rectangle
+    [(10, 5), (15, 5), (12.5, 10)],                    # Triangle
+    [(5, 20), (10, 20), (10, 22), (7, 22), (7, 25), (5, 25)] # L-Shape
+]
 RED_ZONE_BUFFER_M = 0.5
 
 
@@ -118,7 +122,7 @@ def generate_mission_waypoints(
     altitude: float = ALTITUDE_M,
     hfov_deg: float = HFOV_DEG,
     overlap: float = OVERLAP,
-    red_zone_vertices: list = None,
+    red_zones_vertices: list = None,
     red_zone_buffer: float = RED_ZONE_BUFFER_M,
     entry_x: float = CORRIDOR_ENTRY_X,
     entry_y: float = CORRIDOR_ENTRY_Y,
@@ -133,7 +137,7 @@ def generate_mission_waypoints(
     altitude : flight altitude AGL in metres
     hfov_deg : camera horizontal FOV in degrees
     overlap : strip overlap fraction (0-1)
-    red_zone_vertices : list of (x,y) tuples defining the red zone polygon
+    red_zones_vertices : list of lists of (x,y) tuples defining the red zone polygons
     red_zone_buffer : buffer distance around red zone in metres
     entry_x, entry_y : corridor entry point in local frame
 
@@ -146,8 +150,8 @@ def generate_mission_waypoints(
         'estimated_dist'  : total path distance in metres
         'estimated_time'  : estimated flight time in seconds at ARENA_SPEED_MS
     """
-    if red_zone_vertices is None:
-        red_zone_vertices = DEFAULT_RED_ZONE
+    if red_zones_vertices is None:
+        red_zones_vertices = DEFAULT_RED_ZONES
 
     # Build arena polygon
     arena = Polygon([
@@ -157,12 +161,12 @@ def generate_mission_waypoints(
         (0, arena_height),
     ])
 
-    # Build red zone and buffer
-    red_zone = Polygon(red_zone_vertices)
-    red_zone_buffered = red_zone.buffer(red_zone_buffer)
-
-    # Flyable area = arena minus buffered red zone
-    flyable = arena.difference(red_zone_buffered)
+    flyable = arena
+    for rz_verts in red_zones_vertices:
+        if len(rz_verts) >= 3:
+            red_zone = Polygon(rz_verts)
+            red_zone_buffered = red_zone.buffer(red_zone_buffer)
+            flyable = flyable.difference(red_zone_buffered)
 
     # Compute strip width
     strip_width = compute_strip_width(altitude, hfov_deg, overlap)
@@ -238,24 +242,27 @@ if __name__ == "__main__":
         (0, 0), (ARENA_WIDTH_M, 0),
         (ARENA_WIDTH_M, ARENA_HEIGHT_M), (0, ARENA_HEIGHT_M),
     ])
-    RED_ZONE = Polygon(DEFAULT_RED_ZONE)
-    red_zone_buffered = RED_ZONE.buffer(RED_ZONE_BUFFER_M)
-
+    
     fig, ax = plt.subplots(figsize=(13, 8))
 
     xa, ya = arena.exterior.xy
     ax.fill(xa, ya, alpha=0.08, color="green")
     ax.plot(xa, ya, "g-", linewidth=2.5, label="Arena boundary (40×30 m)")
 
-    xr, yr = RED_ZONE.exterior.xy
-    ax.fill(xr, yr, alpha=0.6, color="red")
-    ax.plot(xr, yr, "r-", linewidth=2)
-    ax.text(30, 17, "Red Zone\n(no-fly)", color="white", fontsize=9,
-            ha="center", va="center", fontweight="bold")
+    for i, rz_verts in enumerate(DEFAULT_RED_ZONES):
+        rz = Polygon(rz_verts)
+        xr, yr = rz.exterior.xy
+        ax.fill(xr, yr, alpha=0.6, color="red")
+        ax.plot(xr, yr, "r-", linewidth=2)
+        
+        c = rz.centroid
+        ax.text(c.x, c.y, f"Red Zone {i+1}\n(no-fly)", color="white", fontsize=8,
+                ha="center", va="center", fontweight="bold")
 
-    xb, yb = red_zone_buffered.exterior.xy
-    ax.plot(xb, yb, "r--", linewidth=1, alpha=0.5,
-            label=f"Red zone buffer ({RED_ZONE_BUFFER_M} m)")
+        rz_buf = rz.buffer(RED_ZONE_BUFFER_M)
+        xb, yb = rz_buf.exterior.xy
+        label = f"Red zone buffer ({RED_ZONE_BUFFER_M} m)" if i == 0 else ""
+        ax.plot(xb, yb, "r--", linewidth=1, alpha=0.5, label=label)
 
     wx = [p[0] for p in waypoints]
     wy = [p[1] for p in waypoints]
@@ -298,10 +305,9 @@ if __name__ == "__main__":
     ax.legend(loc="upper right", fontsize=8)
 
     plt.tight_layout()
-    output_dir = os.path.expanduser("~/ros2_ws/outputs")
+    output_dir = os.path.expanduser("~/ros2_ws/src/outputs")
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, "arena_search_mission2.png")
     plt.savefig(output_file, dpi=150)
     print()
     print(f"  Plot saved → {output_file}")
-    plt.show()

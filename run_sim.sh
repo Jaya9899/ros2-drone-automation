@@ -60,7 +60,7 @@ echo ""
 echo "► Starting ArduPilot SITL..."
 gnome-terminal --title="SITL" -- bash -c "
 cd ${ARDUPILOT_DIR}/Tools/autotest
-python3 sim_vehicle.py -v ArduCopter -f quad --console --map \
+python3 sim_vehicle.py -v ArduCopter -f quad --no-mavproxy \
     -l ${SITL_LOCATION}
 exec bash" 2>/dev/null
 
@@ -74,7 +74,7 @@ echo "► Starting MAVROS..."
 gnome-terminal --title="MAVROS" -- bash -c "
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
-ros2 launch mavros apm.launch.py fcu_url:=udp://127.0.0.1:14550@14555
+ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5760
 exec bash" 2>/dev/null
 
 # Wait for MAVROS to connect
@@ -113,7 +113,7 @@ echo "════════════════════════�
 echo "  All systems launched!"
 echo ""
 echo "  Windows:"
-echo "    • SITL        — ArduPilot simulator + MAVProxy map"
+echo "    • SITL        — ArduPilot simulator (headless, --no-mavproxy)"
 echo "    • MAVROS      — ROS2 ↔ MAVLink bridge"
 echo "    • Mission     — Full autonomous mission stack"
 echo "    • Telemetry   — Live JSON telemetry feed"

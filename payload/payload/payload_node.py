@@ -1,28 +1,22 @@
 # payload_node.py — ROS2 node for payload delivery mechanism
 #
-# Provides three Trigger services consumed by the mission_manager:
-#   /payload/lower         — begin lowering payload via servo/winch
-#   /payload/wait_contact  — block until ground contact is detected
+# Provides one Trigger service consumed by the mission_manager:
 #   /payload/release       — release the payload from the mechanism
 #
 # Hardware interface:
 #   Uses MAVROS /mavros/cmd/command to send MAVLink DO_SET_SERVO commands
-#   to control the winch servo and the release servo.
-#
-# Contact detection:
-#   Monitors /mavros/rc/in for servo feedback and motor current.
-#   Falls back to time-based heuristic when no sensor data is available.
+#   to control the release servo.
 #
 # Usage:
 #   ros2 run payload payload_node
-#   ros2 run payload payload_node --ros-args -p winch_channel:=9 -p release_channel:=10
+#   ros2 run payload payload_node --ros-args -p release_channel:=10
 
 import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_srvs.srv import Trigger
-from std_msgs.msg import Float32
 
 from mission_manager.config_loader import load_mission_config
 
@@ -35,42 +29,13 @@ class PayloadNode(Node):
         self.cfg = load_mission_config(self)
 
         # Convenience aliases for frequently accessed params
-        self.winch_channel    = self.cfg.winch_channel
         self.release_channel  = self.cfg.release_channel
-        self.winch_pwm_lower  = self.cfg.winch_pwm_lower
-        self.winch_pwm_stop   = self.cfg.winch_pwm_stop
         self.release_pwm_open = self.cfg.release_pwm_open
         self.release_pwm_lock = self.cfg.release_pwm_lock
-        self.lower_duration   = self.cfg.lower_duration_s
-        self.contact_timeout  = self.cfg.contact_timeout_s
         self.release_pause    = self.cfg.release_pause_s
 
         # ----- Internal state -----
-        self.is_lowered  = False
         self.is_released = False
-
-        # ----- Motor current monitoring (for contact detection) -----
-        self._motor_current = None
-        self.create_subscription(
-            Float32, "/payload/motor_current",
-            self._motor_current_cb, 10,
-        )
-
-        # ----- RC feedback (servo readback via /mavros/rc/in) -----
-        self._rc_channels = []
-        try:
-            from mavros_msgs.msg import RCIn
-            self.create_subscription(
-                RCIn, "/mavros/rc/in",
-                self._rc_in_cb, 10,
-            )
-        except ImportError:
-            pass
-
-        # ----- Publisher for current monitoring telemetry -----
-        self._current_pub = self.create_publisher(
-            Float32, "/payload/current_draw", 10,
-        )
 
         # ----- MAVROS servo command client -----
         try:
@@ -82,7 +47,7 @@ class PayloadNode(Node):
             self._has_mavros = True
             self.get_logger().info(
                 "[payload] MAVROS CommandLong client created "
-                f"(winch ch={self.winch_channel}, release ch={self.release_channel})"
+                f"(release ch={self.release_channel})"
             )
         except ImportError:
             self._has_mavros = False
@@ -92,8 +57,6 @@ class PayloadNode(Node):
             )
 
         # ----- Services -----
-        self.create_service(Trigger, "/payload/lower",        self._handle_lower)
-        self.create_service(Trigger, "/payload/wait_contact", self._handle_wait_contact)
         self.create_service(Trigger, "/payload/release",      self._handle_release)
 
         # Lock release mechanism on startup
@@ -101,21 +64,8 @@ class PayloadNode(Node):
 
         self.get_logger().info(
             "[payload] Payload node ready — "
-            "services: /payload/lower, /payload/wait_contact, /payload/release"
+            "services: /payload/release"
         )
-
-    # -----------------------------------------------------------------------
-    # Sensor callbacks
-    # -----------------------------------------------------------------------
-    def _motor_current_cb(self, msg: Float32):
-        """Track motor current draw for stall/contact detection."""
-        self._motor_current = msg.data
-        # Republish for telemetry
-        self._current_pub.publish(msg)
-
-    def _rc_in_cb(self, msg):
-        """Track RC channel values for servo feedback."""
-        self._rc_channels = list(msg.channels)
 
     # -----------------------------------------------------------------------
     # Servo helper — sends MAVLink DO_SET_SERVO via MAVROS CommandLong
@@ -166,106 +116,6 @@ class PayloadNode(Node):
         return False
 
     # -----------------------------------------------------------------------
-    # /payload/lower — run the winch to lower the payload
-    # -----------------------------------------------------------------------
-    def _handle_lower(self, request, response):
-        self.get_logger().info("[payload] LOWER requested")
-
-        if self.is_lowered:
-            response.success = True
-            response.message = "Payload already lowered"
-            return response
-
-        # Start the winch motor
-        ok = self._set_servo(self.winch_channel, self.winch_pwm_lower)
-        if not ok:
-            response.success = False
-            response.message = "Failed to activate winch servo"
-            return response
-
-        # Run the winch for the configured duration
-        self.get_logger().info(
-            f"[payload] Winch running for {self.lower_duration}s..."
-        )
-        time.sleep(self.lower_duration)
-
-        # Stop the winch
-        self._set_servo(self.winch_channel, self.winch_pwm_stop)
-
-        self.is_lowered = True
-        response.success = True
-        response.message = f"Payload lowered ({self.lower_duration}s winch run)"
-        self.get_logger().info(f"[payload] {response.message}")
-        return response
-
-    # -----------------------------------------------------------------------
-    # /payload/wait_contact — wait until the payload touches the ground
-    # -----------------------------------------------------------------------
-    def _handle_wait_contact(self, request, response):
-        self.get_logger().info("[payload] WAIT_CONTACT requested")
-
-        if not self.is_lowered:
-            response.success = False
-            response.message = "Payload not lowered yet — call /payload/lower first"
-            return response
-
-        self.get_logger().info(
-            f"[payload] Waiting up to {self.contact_timeout}s for ground contact..."
-        )
-
-        contact_detected = False
-        deadline = time.time() + self.contact_timeout
-        check_interval = 0.5  # seconds between sensor polls
-
-        while time.time() < deadline:
-            # --- Motor current stall detection ---
-            # When the payload touches ground, winch cable goes slack and
-            # motor current drops significantly.
-            if self._motor_current is not None:
-                if self._motor_current < 0.2:  # Amps — cable slack
-                    self.get_logger().info(
-                        f"[payload] Motor current low ({self._motor_current:.2f}A) "
-                        f"— ground contact via current sense"
-                    )
-                    contact_detected = True
-                    break
-
-            # --- RC channel feedback (servo position) ---
-            # If the winch servo readback shows stall position
-            if self._rc_channels and self.winch_channel < len(self._rc_channels):
-                readback = self._rc_channels[self.winch_channel]
-                if abs(readback - self.winch_pwm_stop) < 50:
-                    self.get_logger().info(
-                        f"[payload] Servo readback near stop ({readback}) "
-                        f"— possible contact"
-                    )
-                    # Don't immediately confirm — wait for current sense too
-                    pass
-
-            # --- Fallback: time-based heuristic ---
-            # If no sensor data is available, assume contact after the
-            # lower_duration has elapsed at the configured drop altitude.
-            if self._motor_current is None and not self._rc_channels:
-                self.get_logger().info(
-                    "[payload] No sensor data — assuming contact (time-based)"
-                )
-                contact_detected = True
-                break
-
-            time.sleep(check_interval)
-
-        if contact_detected:
-            response.success = True
-            response.message = "Ground contact confirmed"
-            self.get_logger().info("[payload] Ground contact confirmed")
-        else:
-            response.success = False
-            response.message = f"Contact timeout after {self.contact_timeout}s"
-            self.get_logger().warn(f"[payload] {response.message}")
-
-        return response
-
-    # -----------------------------------------------------------------------
     # /payload/release — detach the payload from the mechanism
     # -----------------------------------------------------------------------
     def _handle_release(self, request, response):
@@ -275,11 +125,6 @@ class PayloadNode(Node):
             response.success = True
             response.message = "Payload already released"
             return response
-
-        if not self.is_lowered:
-            self.get_logger().warn(
-                "[payload] Release called before lower — proceeding anyway"
-            )
 
         # Open the release mechanism
         ok = self._set_servo(self.release_channel, self.release_pwm_open)
@@ -295,9 +140,6 @@ class PayloadNode(Node):
         response.success = True
         response.message = "Payload released"
         self.get_logger().info("[payload] Payload released successfully")
-
-        # Retract: stop the winch (rewind would be a future enhancement)
-        self._set_servo(self.winch_channel, self.winch_pwm_stop)
 
         return response
 

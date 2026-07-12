@@ -1,14 +1,14 @@
 # path_planner_node.py — ROS2 node for corridor navigation and lawnmower search
 #
 # Provides Trigger services consumed by the mission_manager:
-#   /path_planner/fly_corridor     — fly through corridor waypoints via Nav2
-#   /path_planner/run_lawnmower    — execute BCD lawnmower pattern via Nav2
+#   /path_planner/fly_corridor     — fly through corridor waypoints via MAVROS
+#   /path_planner/run_lawnmower    — execute BCD lawnmower pattern via MAVROS
 #   /path_planner/stop_lawnmower   — cancel current lawnmower execution
 #
 # Navigation strategy:
-#   Uses Nav2 FollowWaypoints action for lawnmower search.
-#   Uses Nav2 NavigateThroughPoses action for corridor transit.
-#   Falls back to direct MAVROS waypoint publishing if Nav2 is unavailable.
+#   Uses direct MAVROS waypoint publishing for all navigation.
+#   RL-based obstacle avoidance can be enabled via use_rl_avoidance param
+#   (placeholder — RL model integration pending).
 #
 # Usage:
 #   ros2 run path_planner path_planner_node
@@ -20,14 +20,12 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseStamped
-
-# Nav2 action types
-from nav2_msgs.action import FollowWaypoints, NavigateThroughPoses
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from sensor_msgs.msg import NavSatFix
 
 from path_planner.waypoint_gen import (
     generate_mission_waypoints,
@@ -44,13 +42,6 @@ class PathPlannerNode(Node):
         # ----- Load config -----
         self.cfg = load_mission_config(self)
 
-        # ----- Node-specific parameters -----
-        try:
-            self.declare_parameter("use_nav2", True)
-        except Exception:
-            pass
-        self.use_nav2 = self.get_parameter("use_nav2").value
-
         # Corridor waypoints from YAML (parallel x/y lists)
         try:
             self.declare_parameter(
@@ -65,28 +56,28 @@ class PathPlannerNode(Node):
 
         # Red zone vertices from YAML (parallel x/y lists)
         try:
-            self.declare_parameter("red_zone_x", [24.0, 36.0, 36.0, 24.0])
-            self.declare_parameter("red_zone_y", [12.0, 12.0, 22.0, 22.0])
+            self.declare_parameter("red_zone_1_x", [24.0, 36.0, 36.0, 24.0])
+            self.declare_parameter("red_zone_1_y", [12.0, 12.0, 22.0, 22.0])
+            self.declare_parameter("red_zone_2_x", [10.0, 15.0, 12.5])
+            self.declare_parameter("red_zone_2_y", [5.0, 5.0, 10.0])
+            self.declare_parameter("red_zone_3_x", [5.0, 10.0, 10.0, 7.0, 7.0, 5.0])
+            self.declare_parameter("red_zone_3_y", [20.0, 20.0, 22.0, 22.0, 25.0, 25.0])
         except Exception:
             pass
-        rz_x = self.get_parameter("red_zone_x").value
-        rz_y = self.get_parameter("red_zone_y").value
-        self._red_zone_vertices = list(zip(rz_x, rz_y))
+        self._red_zones = []
+        for i in range(1, 4):
+            try:
+                rz_x = self.get_parameter(f"red_zone_{i}_x").value
+                rz_y = self.get_parameter(f"red_zone_{i}_y").value
+                if rz_x and rz_y and len(rz_x) == len(rz_y):
+                    self._red_zones.append(list(zip(rz_x, rz_y)))
+            except Exception:
+                pass
 
         # ----- Callback group for concurrent service handling -----
         self._cb_group = ReentrantCallbackGroup()
 
-        # ----- Nav2 action clients -----
-        self._follow_wp_client = ActionClient(
-            self, FollowWaypoints, "follow_waypoints",
-            callback_group=self._cb_group,
-        )
-        self._nav_through_poses_client = ActionClient(
-            self, NavigateThroughPoses, "navigate_through_poses",
-            callback_group=self._cb_group,
-        )
-
-        # ----- MAVROS fallback publisher -----
+        # ----- MAVROS publisher -----
         try:
             from mavros_msgs.msg import GlobalPositionTarget
             self._gpt_type = GlobalPositionTarget
@@ -100,12 +91,15 @@ class PathPlannerNode(Node):
             self._has_mavros = False
             self._mavros_pub = None
 
+        # ----- RL obstacle avoidance (placeholder) -----
+        self._setup_rl_avoidance()
+
         # ----- Internal state -----
         self._lawnmower_active = False
-        self._lawnmower_goal_handle = None
-        self._corridor_goal_handle = None
 
-        # ----- Pre-generate lawnmower waypoints -----
+        # ----- Generate mission waypoints -----
+        self.current_gps_pos = [None, None]  # [lat, lon]
+
         self._mission_wps = generate_mission_waypoints(
             origin_lat=self.cfg.origin_lat,
             origin_lon=self.cfg.origin_lon,
@@ -114,7 +108,7 @@ class PathPlannerNode(Node):
             altitude=self.cfg.cruise_altitude_m,
             hfov_deg=self.cfg.oak_hfov_deg,
             overlap=self.cfg.strip_overlap,
-            red_zone_vertices=self._red_zone_vertices,
+            red_zones_vertices=self._red_zones,
             red_zone_buffer=self.cfg.red_zone_buffer_m,
             entry_x=self.cfg.corridor_entry_x,
             entry_y=self.cfg.corridor_entry_y,
@@ -126,7 +120,6 @@ class PathPlannerNode(Node):
             f"est. time={self._mission_wps['estimated_time']/60:.1f}min"
         )
 
-        # ----- Convert corridor waypoints to GPS -----
         self._corridor_gps = [
             local_to_gps(x, y, self.cfg.origin_lat, self.cfg.origin_lon)
             for x, y in self._corridor_local
@@ -153,36 +146,125 @@ class PathPlannerNode(Node):
             "[path_planner] Ready — services: fly_corridor, run_lawnmower, stop_lawnmower"
         )
 
+        # ----- GPS subscriber (for position tracking) -----
+        self.current_gps_pos = [None, None]
+        mavros_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(
+            NavSatFix, "/mavros/global_position/global", self._gps_cb, mavros_qos
+        )
+
     # ===================================================================
-    # Helpers: convert GPS waypoints to Nav2 PoseStamped
+    # RL Obstacle Avoidance — placeholder setup
     # ===================================================================
 
-    def _gps_to_pose_stamped(self, lat: float, lon: float,
-                             alt: float = None) -> PoseStamped:
+    def _setup_rl_avoidance(self):
         """
-        Convert a GPS (lat, lon) to a PoseStamped in the map frame.
+        Set up RL-based obstacle avoidance interfaces.
 
-        For Nav2, we convert GPS to local ENU offsets from origin and
-        create a PoseStamped at that position.
+        When use_rl_avoidance is True, the path planner will:
+          1. Publish sensor data to the RL model via /rl_obstacle_avoidance/sensor_input
+          2. Subscribe to velocity overrides from the RL model
+          3. Apply velocity corrections before sending waypoints to MAVROS
+
+        TODO: Integrate trained RL model. Current implementation is a
+              pass-through placeholder.
         """
-        if alt is None:
-            alt = self.cfg.cruise_altitude_m
+        self._rl_avoidance_enabled = self.cfg.use_rl_avoidance
+        self._rl_velocity_override = None  # Latest override from RL model
 
-        # Convert GPS to local ENU
-        dlat = lat - self.cfg.origin_lat
-        dlon = lon - self.cfg.origin_lon
-        METRES_PER_DEG_LAT = 111_320.0
-        metres_per_deg_lon = 111_320.0 * math.cos(
-            math.radians(self.cfg.origin_lat))
+        if self._rl_avoidance_enabled:
+            self.get_logger().info(
+                "[path_planner] RL obstacle avoidance ENABLED "
+                f"(sensor: {self.cfg.rl_sensor_topic})"
+            )
 
-        pose = PoseStamped()
-        pose.header.frame_id = "map"
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.pose.position.x = dlon * metres_per_deg_lon   # East
-        pose.pose.position.y = dlat * METRES_PER_DEG_LAT   # North
-        pose.pose.position.z = alt
-        pose.pose.orientation.w = 1.0  # facing forward (yaw=0)
-        return pose
+            # Subscribe to RL model velocity overrides
+            self._rl_vel_sub = self.create_subscription(
+                TwistStamped,
+                "/rl_obstacle_avoidance/velocity_override",
+                self._rl_velocity_cb,
+                10,
+                callback_group=self._cb_group,
+            )
+
+            # Publisher to forward sensor data to RL model
+            # (The RL node should subscribe directly to the sensor topic,
+            #  but this publisher can be used for pre-processed data)
+            self._rl_status_pub = self.create_publisher(
+                PoseStamped,
+                "/rl_obstacle_avoidance/current_goal",
+                10,
+            )
+        else:
+            self.get_logger().info(
+                "[path_planner] RL obstacle avoidance DISABLED "
+                "(using direct MAVROS waypoint navigation)"
+            )
+
+    def _rl_velocity_cb(self, msg: TwistStamped):
+        """Receive velocity override from RL obstacle avoidance model."""
+        self._rl_velocity_override = msg
+
+    def _apply_rl_avoidance(self, lat: float, lon: float, alt: float):
+        """
+        Apply RL-based obstacle avoidance corrections before navigating
+        to a waypoint.
+
+        TODO: Implement actual RL model inference here. The model should:
+          1. Read current depth/pointcloud data from the sensor topic
+          2. Predict whether the current path is obstructed
+          3. Output a corrected velocity vector or adjusted waypoint
+          4. Return the (possibly modified) target waypoint
+
+        Current implementation: pass-through (no modification).
+
+        Args:
+            lat: Target waypoint latitude
+            lon: Target waypoint longitude
+            alt: Target waypoint altitude
+
+        Returns:
+            Tuple of (lat, lon, alt) — possibly modified by RL model
+        """
+        if not self._rl_avoidance_enabled:
+            return lat, lon, alt
+
+        # Publish current goal for RL model awareness
+        if hasattr(self, '_rl_status_pub'):
+            goal_msg = PoseStamped()
+            goal_msg.header.frame_id = "map"
+            goal_msg.header.stamp = self.get_clock().now().to_msg()
+            goal_msg.pose.position.x = lon  # placeholder mapping
+            goal_msg.pose.position.y = lat
+            goal_msg.pose.position.z = alt
+            self._rl_status_pub.publish(goal_msg)
+
+        # TODO: Query RL model for obstacle avoidance correction
+        # If self._rl_velocity_override is set, apply it to modify
+        # the target waypoint or velocity command.
+        #
+        # Example future implementation:
+        #   if self._rl_velocity_override is not None:
+        #       override = self._rl_velocity_override
+        #       # Apply velocity correction to adjust waypoint
+        #       lat += override.twist.linear.y * dt
+        #       lon += override.twist.linear.x * dt
+        #       self._rl_velocity_override = None
+
+        return lat, lon, alt
+
+    # ===================================================================
+    # GPS callback
+    # ===================================================================
+
+    def _gps_cb(self, nav_msg: NavSatFix):
+        self.current_gps_pos[0] = nav_msg.latitude
+        self.current_gps_pos[1] = nav_msg.longitude
 
     # ===================================================================
     # Helpers: wait for futures
@@ -198,213 +280,52 @@ class PathPlannerNode(Node):
         return True
 
     # ===================================================================
-    # Nav2 FollowWaypoints — for lawnmower
-    # ===================================================================
-
-    def _send_follow_waypoints(self, gps_waypoints: list,
-                               timeout: float) -> bool:
-        """Send a FollowWaypoints goal to Nav2 and block until completion."""
-        if not self._follow_wp_client.wait_for_server(
-            timeout_sec=self.cfg.nav2_connect_timeout_s
-        ):
-            self.get_logger().warn(
-                "[path_planner] Nav2 FollowWaypoints server not available"
-            )
-            return False
-
-        # Build goal
-        goal = FollowWaypoints.Goal()
-        goal.poses = [
-            self._gps_to_pose_stamped(lat, lon) for lat, lon in gps_waypoints
-        ]
-
-        self.get_logger().info(
-            f"[path_planner] Sending {len(goal.poses)} waypoints to Nav2 FollowWaypoints"
-        )
-
-        send_future = self._follow_wp_client.send_goal_async(goal)
-        if not self._wait_for_future(send_future, 10.0):
-            self.get_logger().error("[path_planner] FollowWaypoints send_goal timed out")
-            return False
-
-        goal_handle = send_future.result()
-        if not goal_handle or not goal_handle.accepted:
-            self.get_logger().error("[path_planner] Nav2 rejected FollowWaypoints goal")
-            return False
-
-        self._lawnmower_goal_handle = goal_handle
-        self.get_logger().info("[path_planner] Nav2 accepted FollowWaypoints goal")
-
-        # Wait for result
-        result_future = goal_handle.get_result_async()
-        if not self._wait_for_future(result_future, timeout):
-            self.get_logger().error("[path_planner] FollowWaypoints result timed out")
-            return False
-
-        self._lawnmower_goal_handle = None
-
-        if result_future.result() is None:
-            self.get_logger().warn("[path_planner] FollowWaypoints timed out")
-            return False
-
-        result = result_future.result().result
-        missed = result.missed_waypoints
-        if missed:
-            self.get_logger().warn(
-                f"[path_planner] FollowWaypoints missed {len(missed)} waypoints: {missed}"
-            )
-        else:
-            self.get_logger().info("[path_planner] FollowWaypoints completed successfully")
-
-        return True
-
-    # ===================================================================
-    # Nav2 NavigateThroughPoses — for corridor transit
-    # ===================================================================
-
-    def _send_navigate_through_poses(self, gps_waypoints: list,
-                                     timeout: float) -> bool:
-        """Send a NavigateThroughPoses goal to Nav2 and block until completion."""
-        if not self._nav_through_poses_client.wait_for_server(
-            timeout_sec=self.cfg.nav2_connect_timeout_s
-        ):
-            self.get_logger().warn(
-                "[path_planner] Nav2 NavigateThroughPoses server not available"
-            )
-            return False
-
-        goal = NavigateThroughPoses.Goal()
-        goal.poses = [
-            self._gps_to_pose_stamped(lat, lon) for lat, lon in gps_waypoints
-        ]
-
-        self.get_logger().info(
-            f"[path_planner] Sending {len(goal.poses)} poses to Nav2 NavigateThroughPoses"
-        )
-
-        send_future = self._nav_through_poses_client.send_goal_async(goal)
-        if not self._wait_for_future(send_future, 10.0):
-            self.get_logger().error("[path_planner] NavigateThroughPoses send_goal timed out")
-            return False
-
-        goal_handle = send_future.result()
-        if not goal_handle or not goal_handle.accepted:
-            self.get_logger().error(
-                "[path_planner] Nav2 rejected NavigateThroughPoses goal"
-            )
-            return False
-
-        self._corridor_goal_handle = goal_handle
-        self.get_logger().info("[path_planner] Nav2 accepted corridor navigation goal")
-
-        result_future = goal_handle.get_result_async()
-        if not self._wait_for_future(result_future, timeout):
-            self.get_logger().error("[path_planner] NavigateThroughPoses result timed out")
-            return False
-
-        self._corridor_goal_handle = None
-
-        if result_future.result() is None:
-            self.get_logger().warn("[path_planner] NavigateThroughPoses timed out")
-            return False
-
-        self.get_logger().info("[path_planner] Corridor navigation completed")
-        return True
-
-    # ===================================================================
-    # MAVROS fallback — direct waypoint publishing
+    # MAVROS waypoint navigation
     # ===================================================================
 
     def _fly_waypoints_mavros(self, gps_waypoints: list,
                               speed_ms: float, timeout: float) -> bool:
         """
-        Fly through waypoints using direct MAVROS global position setpoints.
-        Used as fallback when Nav2 is unavailable.
+        Fly through waypoints using mavros_utils.goto and wait_for_arrival.
+        If RL avoidance is enabled, each waypoint is passed through the
+        RL correction layer before being sent to MAVROS.
         """
-        if not self._has_mavros:
-            self.get_logger().warn(
-                "[path_planner] No MAVROS publisher — simulating waypoint flight"
-            )
-            for i, (lat, lon) in enumerate(gps_waypoints):
-                self.get_logger().info(
-                    f"[path_planner] [SIM] Flying to WP{i}: ({lat:.7f}, {lon:.7f})"
-                )
-                time.sleep(0.5)  # simulate transit time
-            return True
+        import sys
+        # Ensure mission_manager is in path for imports
+        sys.path.insert(0, '/home/jaya9899/ros2_ws/install/mission_manager/lib/python3.10/site-packages')
+        from mission_manager.mavros_utils import goto, wait_for_arrival
 
-        from mavros_msgs.msg import GlobalPositionTarget
-        from std_msgs.msg import Header
-        from sensor_msgs.msg import NavSatFix
-
-        arrival_tolerance = self.cfg.mavros_arrival_tolerance_m
+        # At least 16s per waypoint to give SITL time to manoeuvre
+        per_wp_timeout = max(timeout / max(len(gps_waypoints), 1), 16.0)
 
         for i, (lat, lon) in enumerate(gps_waypoints):
+            if not self._lawnmower_active and i > 0:
+                return False
+
+            # Apply RL obstacle avoidance correction (placeholder)
+            lat, lon, alt = self._apply_rl_avoidance(
+                lat, lon, self.cfg.cruise_altitude_m)
+
             self.get_logger().info(
-                f"[path_planner] MAVROS WP{i}/{len(gps_waypoints)-1}: "
+                f"[path_planner] WP{i+1}/{len(gps_waypoints)}: "
                 f"({lat:.7f}, {lon:.7f})"
             )
 
-            # Publish setpoint
-            msg = GlobalPositionTarget()
-            msg.header = Header()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
-            msg.type_mask = (
-                GlobalPositionTarget.IGNORE_VX |
-                GlobalPositionTarget.IGNORE_VY |
-                GlobalPositionTarget.IGNORE_VZ |
-                GlobalPositionTarget.IGNORE_AFX |
-                GlobalPositionTarget.IGNORE_AFY |
-                GlobalPositionTarget.IGNORE_AFZ |
-                GlobalPositionTarget.IGNORE_YAW_RATE
+            # Send waypoint command (higher publish count for reliability)
+            goto(self, lat=lat, lon=lon,
+                 altitude_m=alt,
+                 publish_count=20)
+
+            # Wait for arrival
+            arrived = wait_for_arrival(
+                self, lat=lat, lon=lon,
+                tolerance_m=self.cfg.mavros_arrival_tolerance_m,
+                timeout=per_wp_timeout,
             )
-            msg.latitude = lat
-            msg.longitude = lon
-            msg.altitude = self.cfg.cruise_altitude_m
-
-            # Keep publishing until we arrive at this waypoint
-            arrived = False
-            deadline = time.time() + timeout / len(gps_waypoints)
-
-            def _haversine(lat1, lon1, lat2, lon2):
-                R = 6_371_000.0
-                phi1, phi2 = math.radians(lat1), math.radians(lat2)
-                dphi = math.radians(lat2 - lat1)
-                dlam = math.radians(lon2 - lon1)
-                a = (math.sin(dphi / 2) ** 2 +
-                     math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
-                return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-            current_pos = [None, None]  # [lat, lon]
-
-            def _gps_cb(nav_msg: NavSatFix):
-                current_pos[0] = nav_msg.latitude
-                current_pos[1] = nav_msg.longitude
-
-            sub = self.create_subscription(
-                NavSatFix, "/mavros/global_position/global", _gps_cb, 10
-            )
-
-            while not arrived and time.time() < deadline:
-                msg.header.stamp = self.get_clock().now().to_msg()
-                self._mavros_pub.publish(msg)
-                time.sleep(0.25)
-
-                if current_pos[0] is not None:
-                    dist = _haversine(current_pos[0], current_pos[1], lat, lon)
-                    if dist < arrival_tolerance:
-                        arrived = True
-
-                if not self._lawnmower_active and i > 0:
-                    # Lawnmower was cancelled
-                    self.destroy_subscription(sub)
-                    return False
-
-            self.destroy_subscription(sub)
 
             if not arrived:
                 self.get_logger().warn(
-                    f"[path_planner] Timeout reaching WP{i}"
+                    f"[path_planner] Timeout reaching WP{i+1}, continuing to next"
                 )
 
         return True
@@ -414,78 +335,50 @@ class PathPlannerNode(Node):
     # ===================================================================
 
     def _handle_fly_corridor(self, request, response):
-        """Fly through corridor waypoints."""
+        """Fly through corridor waypoints. Blocks until navigation completes."""
         self.get_logger().info("[path_planner] FLY_CORRIDOR requested")
-
         corridor_wps = list(self._corridor_gps)
 
-        if self.use_nav2:
-            ok = self._send_navigate_through_poses(
-                corridor_wps, self.cfg.corridor_timeout_s)
-        else:
-            ok = self._fly_waypoints_mavros(
-                corridor_wps, self.cfg.corridor_speed_ms,
-                self.cfg.corridor_timeout_s)
+        if not rclpy.ok():
+            response.success = False
+            response.message = "Node shutting down"
+            return response
 
-        if not ok:
-            # Try MAVROS fallback if Nav2 failed
-            if self.use_nav2 and self._has_mavros:
-                self.get_logger().warn(
-                    "[path_planner] Nav2 failed, falling back to MAVROS"
-                )
-                ok = self._fly_waypoints_mavros(
-                    corridor_wps, self.cfg.corridor_speed_ms,
-                    self.cfg.corridor_timeout_s)
+        ok = self._fly_waypoints_mavros(
+            corridor_wps, self.cfg.corridor_speed_ms,
+            self.cfg.corridor_timeout_s)
 
+        self.get_logger().info(f"[path_planner] FLY_CORRIDOR finished (ok={ok})")
         response.success = ok
-        response.message = "Corridor transit complete" if ok else "Corridor transit failed"
+        response.message = f"Corridor transit {'completed' if ok else 'failed'}"
         return response
 
     def _handle_run_lawnmower(self, request, response):
-        """Execute BCD lawnmower search pattern."""
+        """Execute BCD lawnmower search pattern. Blocks until complete or stopped."""
         self.get_logger().info("[path_planner] RUN_LAWNMOWER requested")
-
         self._lawnmower_active = True
         gps_wps = self._mission_wps['gps_waypoints']
 
-        if self.use_nav2:
-            ok = self._send_follow_waypoints(
-                gps_wps, self.cfg.lawnmower_timeout_s)
-        else:
-            ok = self._fly_waypoints_mavros(
-                gps_wps, self.cfg.arena_speed_ms,
-                self.cfg.lawnmower_timeout_s)
+        if not rclpy.ok():
+            self._lawnmower_active = False
+            response.success = False
+            response.message = "Node shutting down"
+            return response
 
-        if not ok and self.use_nav2 and self._has_mavros:
-            self.get_logger().warn(
-                "[path_planner] Nav2 failed, falling back to MAVROS"
-            )
-            ok = self._fly_waypoints_mavros(
-                gps_wps, self.cfg.arena_speed_ms,
-                self.cfg.lawnmower_timeout_s)
+        ok = self._fly_waypoints_mavros(
+            gps_wps, self.cfg.arena_speed_ms,
+            self.cfg.lawnmower_timeout_s)
 
         self._lawnmower_active = False
-
+        self.get_logger().info(f"[path_planner] RUN_LAWNMOWER finished (ok={ok})")
         response.success = ok
-        response.message = (
-            f"Lawnmower complete ({len(gps_wps)} waypoints)"
-            if ok else "Lawnmower failed or cancelled"
-        )
+        response.message = f"Lawnmower {'completed' if ok else 'stopped/failed'}"
         return response
 
     def _handle_stop_lawnmower(self, request, response):
         """Cancel current lawnmower execution."""
         self.get_logger().info("[path_planner] STOP_LAWNMOWER requested")
-
         self._lawnmower_active = False
-
-        # Cancel Nav2 goal if active
-        if self._lawnmower_goal_handle is not None:
-            self.get_logger().info("[path_planner] Cancelling Nav2 FollowWaypoints goal")
-            cancel_future = self._lawnmower_goal_handle.cancel_goal_async()
-            self._wait_for_future(cancel_future, 5.0)
-            self._lawnmower_goal_handle = None
-
         response.success = True
         response.message = "Lawnmower stopped"
         return response

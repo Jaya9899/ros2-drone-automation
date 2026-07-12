@@ -13,6 +13,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from std_msgs.msg import String
 from sensor_msgs.msg import NavSatFix
 
@@ -23,6 +24,14 @@ class SitlQrSimulator(Node):
     def __init__(self):
         super().__init__("sitl_qr_simulator")
         self.cfg = load_mission_config(self)
+
+        # QoS profile for high-frequency telemetry / sensors
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
 
         # ── QR target parameters ─────────────────────────────────
         self.declare_parameter("qr_location_lat", 12.9718)
@@ -44,7 +53,7 @@ class SitlQrSimulator(Node):
         # ── GPS subscriber ───────────────────────────────────────
         self.create_subscription(
             NavSatFix, "/mavros/global_position/global",
-            self._gps_cb, 10,
+            self._gps_cb, sensor_qos,
         )
 
         self.get_logger().info(

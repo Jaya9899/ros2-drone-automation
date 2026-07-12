@@ -15,7 +15,13 @@ from std_srvs.srv import Trigger
 
 
 def _call_trigger(node: Node, srv_name: str, timeout: float = 10.0):
-    """Call a Trigger-type service and return the result."""
+    """Call a Trigger-type service and return the result.
+
+    Uses poll-based wait instead of spin_until_future_complete so it is
+    safe to call from a background thread while the main thread spins.
+    """
+    import time
+
     client = node.create_client(Trigger, srv_name)
 
     if not client.wait_for_service(timeout_sec=timeout):
@@ -26,7 +32,11 @@ def _call_trigger(node: Node, srv_name: str, timeout: float = 10.0):
         return None
 
     future = client.call_async(Trigger.Request())
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
+
+    # Poll-based wait — safe when main thread already spins the node
+    deadline = time.time() + timeout
+    while not future.done() and time.time() < deadline:
+        time.sleep(0.05)
 
     if future.result() is None:
         node.get_logger().error(f"[srv_helpers] Call to {srv_name} returned no result")
@@ -154,51 +164,6 @@ def call_scan_reference_qr(node: Node, timeout: float = 10.0) -> str | None:
 # ---------------------------------------------------------------------------
 # Payload helpers
 # ---------------------------------------------------------------------------
-
-def call_payload_lower(node: Node, timeout: float = 10.0) -> bool:
-    """
-    Ask the payload node to begin lowering the payload via the
-    pulley/winch mechanism.
-    """
-    node.get_logger().info("[srv_helpers] Requesting payload/lower")
-
-    result = _call_trigger(node, "/payload/lower", timeout=timeout)
-
-    if result is None:
-        node.get_logger().warn(
-            "[srv_helpers] payload/lower service unavailable — skipping"
-        )
-        return False
-
-    return result.success
-
-
-def call_payload_wait_contact(
-    node: Node,
-    timeout: float = 10.0,
-    fallback_wait: float = 5.0,
-) -> bool:
-    """
-    Ask the payload node whether ground contact has been detected.
-
-    The payload node is expected to block (or poll) until the payload
-    touches the ground, then return success=True.
-    """
-    node.get_logger().info("[srv_helpers] Waiting for payload ground contact")
-
-    result = _call_trigger(node, "/payload/wait_contact", timeout=timeout)
-
-    if result is None:
-        node.get_logger().warn(
-            "[srv_helpers] payload/wait_contact service unavailable — "
-            "assuming contact after timeout"
-        )
-        import time
-        time.sleep(fallback_wait)
-        return False
-
-    return result.success
-
 
 def call_payload_release(node: Node, timeout: float = 10.0) -> bool:
     """

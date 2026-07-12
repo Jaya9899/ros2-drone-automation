@@ -15,7 +15,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from mavros_msgs.msg import State as MavrosState, RCIn
 from sensor_msgs.msg import BatteryState
@@ -42,16 +42,25 @@ class MissionNode(Node):
         # ----- Subscribers -----
         self.create_subscription(String, "/qr/detection", self._qr_detection_cb, 10)
 
-        self.mavros_state = None
-        self.create_subscription(MavrosState, "/mavros/state", self._mavros_state_cb, 10)
+        # QoS for MAVROS topics. MAVROS publishes state/sensor data as
+        # BEST_EFFORT; a RELIABLE subscriber silently receives nothing
+        # (topic looks connected but delivers no messages). Every MAVROS
+        # subscription must use BEST_EFFORT + VOLATILE + KEEP_LAST.
+        mavros_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
 
-        # QoS fix: MAVROS publishes battery as BEST_EFFORT
-        battery_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.mavros_state = None
+        self.create_subscription(MavrosState, "/mavros/state", self._mavros_state_cb, mavros_qos)
+
         self.battery_voltage = None
-        self.create_subscription(BatteryState, "/mavros/battery", self._battery_cb, battery_qos)
+        self.create_subscription(BatteryState, "/mavros/battery", self._battery_cb, mavros_qos)
 
         self._rc_channels = []
-        self.create_subscription(RCIn, "/mavros/rc/in", self._rc_in_cb, 10)
+        self.create_subscription(RCIn, "/mavros/rc/in", self._rc_in_cb, mavros_qos)
 
         # ----- Internal flags -----
         self._battery_critical  = False
@@ -101,6 +110,9 @@ class MissionNode(Node):
 
             if pwm > thresh:
                 self._rc_auto_active = True
+                if not was_auto and self.sm.current_state.id == "IDLE":
+                     self.get_logger().info("[mission_node] RC auto activated")
+                     self.sm.auto_activate()
             else:
                 self._rc_auto_active = False
                 if was_auto:
@@ -126,9 +138,8 @@ class MissionNode(Node):
             return
 
         if self.sm.mission_target_qr and qr_content == self.sm.mission_target_qr:
-            self.sm.target_gps = (lat, lon)
             self.get_logger().info(
-                f"[mission_node] QR MATCHED: '{qr_content}' at ({lat}, {lon})"
+                f"[mission_node] QR MATCHED: '{qr_content}'"
             )
             self.sm.qr_matched()
         else:
@@ -166,8 +177,6 @@ class MissionNode(Node):
             self._abort_requested = False
             self._battery_critical = False
 
-            self.sm.auto_activate()
-
             # ── Phase 1: Scan reference QR ─────────────────────────────
             self._publish_status("SCAN_REFERENCE_QR")
             self.sm.auto_activate()          # IDLE → SCAN_REFERENCE_QR (on_enter blocks)
@@ -198,30 +207,24 @@ class MissionNode(Node):
                 time.sleep(0.5)
             # _qr_detection_cb already called sm.qr_matched() → TARGET_FOUND
 
-            # ── Phase 5: Navigate to drop ───────────────────────────────
+            # ── Phase 5: Drop payload ───────────────────────────────────
             self._publish_status("TARGET_FOUND")
-            if self._check_abort():
-                return
-            self.sm.nav_to_drop()            # → NAVIGATE_TO_DROP (on_enter blocks)
-
-            self._publish_status("NAVIGATE_TO_DROP")
             if self._check_abort():
                 return
             self.sm.drop_position_reached()  # → DROPPING (on_enter blocks)
 
-            # ── Phase 6: Drop payload ───────────────────────────────────
             self._publish_status("DROPPING")
             if self._check_abort():
                 return
             self.sm.drop_complete()          # → CORRIDOR_2_TRANSIT
 
-            # ── Phase 7: Corridor 2 (obstacles) ────────────────────────
+            # ── Phase 6: Corridor 2 (obstacles) ────────────────────────
             self._publish_status("CORRIDOR_2_TRANSIT")
             if self._check_abort():
                 return
             self.sm.c2_complete()            # → HOMING (on_enter blocks)
 
-            # ── Phase 8: Home and land ──────────────────────────────────
+            # ── Phase 7: Home and land ──────────────────────────────────
             self._publish_status("HOMING")
             if self._check_abort():
                 return
@@ -273,8 +276,6 @@ class MissionNode(Node):
             "state":         state_id,
             "battery_v":     round(self.battery_voltage, 2) if self.battery_voltage else None,
             "target_qr":     self.sm.mission_target_qr,
-            "target_gps":    list(self.sm.target_gps) if self.sm.target_gps else None,
-            "home_gps":      list(self.sm.home_position) if self.sm.home_position else None,
             "drop_confirmed": self.sm.drop_confirmed,
             "rc_auto":       self._rc_auto_active,
             "fcu_connected": self.mavros_state.connected if self.mavros_state else False,

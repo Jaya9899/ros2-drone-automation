@@ -3,7 +3,8 @@
 # Launches the full mission stack in a single command:
 #   ros2 launch mission_manager mission.launch.py
 #
-# Replaces run_sim.sh (which opened 6 gnome-terminal windows).
+# Navigation uses direct MAVROS waypoint publishing.
+# RL-based obstacle avoidance can be enabled via config (placeholder).
 # MAVROS and SITL must still be started separately.
 
 import os
@@ -15,7 +16,10 @@ from launch.actions import (
     TimerAction,
 )
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.launch_description_sources import (
+    PythonLaunchDescriptionSource,
+    AnyLaunchDescriptionSource,
+)
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -26,17 +30,13 @@ def generate_launch_description():
     # ----- Paths -----
     mission_mgr_share = get_package_share_directory("mission_manager")
     mission_params = os.path.join(mission_mgr_share, "config", "mission_params.yaml")
-    nav2_params = os.path.join(mission_mgr_share, "config", "nav2_params.yaml")
 
     # ----- Launch arguments -----
     use_sim = DeclareLaunchArgument(
         "use_sim", default_value="true",
         description="Use simulation time"
     )
-    use_nav2_arg = DeclareLaunchArgument(
-        "use_nav2", default_value="true",
-        description="Launch Nav2 stack for obstacle avoidance"
-    )
+
     launch_mavros_arg = DeclareLaunchArgument(
         "launch_mavros", default_value="false",
         description="Launch MAVROS (set false if started separately)"
@@ -46,13 +46,13 @@ def generate_launch_description():
     # MAVROS (optional — usually started separately with SITL)
     # ================================================================
     mavros_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
+        AnyLaunchDescriptionSource([
             PathJoinSubstitution([
-                FindPackageShare("mavros"), "launch", "apm.launch.py"
+                FindPackageShare("mavros"), "launch", "apm.launch"
             ])
         ]),
         launch_arguments={
-            "fcu_url": "udp://127.0.0.1:14550@",
+            "fcu_url": "tcp://127.0.0.1:5760",
         }.items(),
         condition=IfCondition(
             LaunchConfiguration("launch_mavros")
@@ -101,19 +101,24 @@ def generate_launch_description():
     )
 
     # ================================================================
-    # Nav2 stack
+    # Perception (QR scanner + depth processor)
     # ================================================================
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare("nav2_bringup"), "launch", "navigation_launch.py"
-            ])
-        ]),
-        launch_arguments={
-            "params_file": nav2_params,
-            "use_sim_time": LaunchConfiguration("use_sim"),
-        }.items(),
+    qr_scanner_node = Node(
+        package="perception",
+        executable="qr_scanner_node",
+        name="qr_scanner_node",
+        output="screen",
+        parameters=[mission_params],
     )
+
+    depth_processor_node = Node(
+        package="perception",
+        executable="depth_processor_node",
+        name="depth_processor_node",
+        output="screen",
+        parameters=[mission_params],
+    )
+
 
     # ================================================================
     # OAK-D camera driver (depthai-ros)
@@ -135,7 +140,6 @@ def generate_launch_description():
     # ================================================================
     return LaunchDescription([
         use_sim,
-        use_nav2_arg,
         launch_mavros_arg,
 
         # Start safety monitor first (always running)
@@ -144,11 +148,12 @@ def generate_launch_description():
         # Start payload node
         payload_node,
 
-        # Start path planner (needs Nav2 to be up for full functionality)
+        # Start path planner
         path_planner_node,
 
-        # Start Nav2 stack
-        nav2_launch,
+        # Start perception nodes
+        qr_scanner_node,
+        depth_processor_node,
 
         # Start OAK-D driver
         oakd_launch,

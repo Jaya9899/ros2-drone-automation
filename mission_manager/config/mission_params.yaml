@@ -35,6 +35,10 @@ mission_node:
     # Battery
     battery_critical_v: 10.0
     battery_warning_v: 14.0
+    battery_capacity_mah: 5200.0
+    battery_cells: 4
+    nominal_voltage_v: 14.8
+    auw_grams: 1950.0
     # Timeouts
     service_timeout_s: 10.0
     altitude_timeout_s: 30.0
@@ -104,38 +108,34 @@ path_planner_node:
     arrival_timeout_s: 60.0
     goto_publish_count: 5
     # Path planner specific
-    use_nav2: true
     corridor_waypoints_x: [0.0, 2.5, 5.0, 7.5, 10.0]
     corridor_waypoints_y: [15.0, 15.0, 15.0, 15.0, 15.0]
-    red_zone_x: [24.0, 36.0, 36.0, 24.0]
-    red_zone_y: [12.0, 12.0, 22.0, 22.0]
+    red_zone_1_x: [24.0, 36.0, 36.0, 24.0]
+    red_zone_1_y: [12.0, 12.0, 22.0, 22.0]
+    red_zone_2_x: [10.0, 15.0, 12.5]
+    red_zone_2_y: [5.0, 5.0, 10.0]
+    red_zone_3_x: [5.0, 10.0, 10.0, 7.0, 7.0, 5.0]
+    red_zone_3_y: [20.0, 20.0, 22.0, 22.0, 25.0, 25.0]
     red_zone_buffer_m: 0.5
     corridor_entry_x: 0.0
     corridor_entry_y: 15.0
     corridor_timeout_s: 120.0
     lawnmower_timeout_s: 600.0
-    nav2_connect_timeout_s: 10.0
     mavros_arrival_tolerance_m: 2.0
+    # RL obstacle avoidance (placeholder — enable when model is ready)
+    use_rl_avoidance: false
+    rl_model_path: ""
+    rl_sensor_topic: "/oak/points"
 
 # ─── Payload Node ─────────────────────────────────────────────────
 payload_node:
   ros__parameters:
     # Timeouts
     service_timeout_s: 10.0
-    altitude_timeout_s: 30.0
-    altitude_tolerance_m: 0.5
-    arrival_tolerance_m: 1.5
-    arrival_timeout_s: 60.0
-    goto_publish_count: 5
     # Payload specific
-    winch_channel: 9
     release_channel: 10
-    winch_pwm_lower: 1100
-    winch_pwm_stop: 1500
     release_pwm_open: 1100
     release_pwm_lock: 1900
-    lower_duration_s: 5.0
-    contact_timeout_s: 15.0
     release_pause_s: 1.0
 
 # ─── Telemetry Node ───────────────────────────────────────────────
@@ -149,7 +149,28 @@ sitl_qr_simulator:
   ros__parameters:
     origin_lat: 12.9716
     origin_lon: 77.5946
-    qr_location_lat: 12.9718
-    qr_location_lon: 77.5948
+    qr_location_lat: 12.9717  
+    qr_location_lon: 77.5947
     qr_content: "QR_TARGET_DEMO_ID"
-    detection_radius_m: 5.0
+    detection_radius_m: 10.0
+
+# ─── QR Scanner Node (perception) ────────────────────────────────
+qr_scanner_node:
+  ros__parameters:
+    gate_required: 3
+    min_confidence: 0.5
+    stop_confidence: 0.7
+    delivery_altitude: 10.0
+    # Camera intrinsics — RPi Camera Module 3 at 1280x720 (approximate)
+    camera_fx: 920.0
+    camera_fy: 920.0
+    camera_cx: 640.0
+    camera_cy: 360.0
+
+# ─── Depth Processor Node (perception) ───────────────────────────
+depth_processor_node:
+  ros__parameters:
+    roi_width: 100
+    roi_height: 100
+    min_valid_depth_mm: 300
+    warning_distance_m: 1.5

@@ -9,7 +9,7 @@
 #   - SITL QR simulator (replaces real camera)
 #   - Mission node (delayed 8s for SITL + MAVROS stabilization)
 #
-# Does NOT launch Nav2 or OAK-D (not available in SITL).
+# Does NOT launch OAK-D (not available in SITL).
 #
 # Usage:
 #   ros2 launch mission_manager sitl_mission.launch.py
@@ -24,7 +24,7 @@ from launch.actions import (
     LogInfo,
 )
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -48,7 +48,7 @@ def generate_launch_description():
     )
     fcu_url_arg = DeclareLaunchArgument(
         "fcu_url",
-        default_value="udp://127.0.0.1:14550@14555",
+        default_value="tcp://127.0.0.1:5760",
         description="MAVROS FCU URL for SITL",
     )
 
@@ -56,9 +56,9 @@ def generate_launch_description():
     # MAVROS (optional — usually started separately with SITL)
     # ================================================================
     mavros_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
+        AnyLaunchDescriptionSource([
             PathJoinSubstitution([
-                FindPackageShare("mavros"), "launch", "apm.launch.py"
+                FindPackageShare("mavros"), "launch", "apm.launch"
             ])
         ]),
         launch_arguments={
@@ -81,17 +81,14 @@ def generate_launch_description():
     )
 
     # ================================================================
-    # Path planner (Nav2 disabled for SITL — uses MAVROS fallback)
+    # Path planner (direct MAVROS waypoint navigation)
     # ================================================================
     path_planner_node = Node(
         package="path_planner",
         executable="path_planner_node",
         name="path_planner_node",
         output="screen",
-        parameters=[
-            mission_params,
-            {"use_nav2": False},  # override: no Nav2 in SITL
-        ],
+        parameters=[mission_params],
     )
 
     # ================================================================
@@ -128,6 +125,19 @@ def generate_launch_description():
     )
 
     # ================================================================
+    # QR Scanner Node (perception — provides /perception/scan_qr service)
+    # In SITL, the sitl_qr_simulator handles /qr/detection directly,
+    # but the QR scanner node provides the services the FSM expects.
+    # ================================================================
+    qr_scanner_node = Node(
+        package="perception",
+        executable="qr_scanner_node",
+        name="qr_scanner_node",
+        output="screen",
+        parameters=[mission_params],
+    )
+
+    # ================================================================
     # Mission node (delayed 8s to let SITL + MAVROS stabilize)
     # ================================================================
     mission_node = Node(
@@ -157,6 +167,7 @@ def generate_launch_description():
         path_planner_node,
         telemetry_node,
         sitl_qr_sim,
+        qr_scanner_node,
 
         # Mission node — delayed to let everything stabilize
         TimerAction(
