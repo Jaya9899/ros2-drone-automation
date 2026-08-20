@@ -45,7 +45,7 @@ mission_node:
     altitude_tolerance_m: 0.5
     arrival_tolerance_m: 1.5
     arrival_timeout_s: 60.0
-    goto_publish_count: 5
+    goto_publish_count: 20
     # Mission-specific
     tick_rate_hz: 2.0
     auto_start: true
@@ -106,7 +106,7 @@ path_planner_node:
     altitude_tolerance_m: 0.5
     arrival_tolerance_m: 1.5
     arrival_timeout_s: 60.0
-    goto_publish_count: 5
+    goto_publish_count: 20
     # Path planner specific
     corridor_waypoints_x: [0.0, 2.5, 5.0, 7.5, 10.0]
     corridor_waypoints_y: [15.0, 15.0, 15.0, 15.0, 15.0]

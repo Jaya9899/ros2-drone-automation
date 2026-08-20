@@ -1,0 +1,55 @@
+<!--
+  oak_depth_sensor.sdf — forward-facing OAK-D Lite depth camera (Section 6).
+
+  This is an SDF FRAGMENT, not a standalone model. Paste the <sensor> element
+  below into the ardupilot_gazebo drone model's forward link (the iris
+  base_link / body link), then rebuild/relaunch the sim. It matches the OAK-D
+  Lite 400P: 71.9 deg HFOV, 640x400, 0.35-15 m range, 15 fps.
+
+  Where it goes:
+      <model name="iris_with_ardupilot">
+        <link name="base_link">
+          ...
+          [ the <sensor> element below goes here ]
+        </link>
+      </model>
+
+  Requirements on the WORLD (bcd_sim/worlds/arena.sdf already has these):
+    - <plugin ... gz-sim-sensors-system> with a <render_engine> (ogre2), or the
+      camera renders nothing.
+    - SDF >= 1.9 / gz-sim8 (Harmonic).
+
+  Pose: 0.10 m forward, level with the body +x axis. This MUST match the
+  base_link -> oak_forward static TF the launch files publish
+  (static_transform_publisher 0.1 0 0 0 0 0 base_link oak_forward) or the scan
+  will render offset in RViz. A gz camera looks down its own +x, so zero
+  rotation here points it straight ahead.
+
+  Output topics (gz), bridged to ROS by launch/gz_depth_bridge.launch.py:
+    gz  oak/depth              -> ROS /oak/depth              (Image, 32FC1 m)
+    gz  oak/depth/camera_info  -> ROS /oak/depth/camera_info  (CameraInfo)
+  32FC1 (metres) is the SIM encoding; hardware is 16UC1 (mm). The sector
+  builder handles both from the message encoding — do not convert here.
+
+  Reminder: sim depth is perfect (no dropout, no noise), so Stages 3 and 4
+  cannot be validated here. This sensor exists to feed Stages 5, 6, 7.
+-->
+<sensor name="oak_depth" type="depth_camera">
+  <pose>0.10 0 0 0 0 0</pose>
+  <always_on>1</always_on>
+  <update_rate>15</update_rate>
+  <visualize>true</visualize>
+  <topic>oak/depth</topic>
+  <camera>
+    <horizontal_fov>1.2549</horizontal_fov>   <!-- 71.9 deg -->
+    <image>
+      <width>640</width>
+      <height>400</height>
+      <format>R_FLOAT32</format>
+    </image>
+    <clip>
+      <near>0.35</near>
+      <far>15.0</far>
+    </clip>
+  </camera>
+</sensor>

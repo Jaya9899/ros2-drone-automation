@@ -34,6 +34,7 @@ setup(
             'safety_monitor = mission_manager.safety_monitor:main',
             'telemetry_node = mission_manager.telemetry_node:main',
             'sitl_qr_simulator = mission_manager.sitl_qr_simulator:main',
+            'flight_primitives = mission_manager.flight_primitives:main',
         ],
     },
 )

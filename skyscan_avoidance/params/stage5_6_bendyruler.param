@@ -1,0 +1,41 @@
+# stage5_6_bendyruler.param — Stages 5 (arena) and 6 (corridor).
+# Same code, same mode, same parameters for both: the corridor is just a
+# waypoint leg that happens to have walls near it. Object-avoidance path
+# planning (BendyRuler) deviates around obstacles between waypoints in AUTO.
+#
+# WHY THE MARGINS ARE 1.2, NOT 2.0 (trap: a 2.0 m margin cannot fit a 3.5 m
+# corridor — walls sit 1.75 m either side of centreline, so no point is 2 m
+# clear of both). 1.2 leaves ~0.55 m of slack either side. This single number
+# is the only place the corridor width enters the design.
+#
+# OA_MARGIN_MAX is BendyRuler's margin (AUTO/GUIDED); AVOID_MARGIN is simple
+# avoidance's (Loiter/AltHold). Different subsystems — confirm which is moving
+# before tuning (trap #6). Both 1.2 here.
+#
+# WPNAV_SPEED is CENTIMETRES/s and is STAGED (see Stage 8): 100 = 1.0 m/s is a
+# sim nominal. On hardware ramp 30 -> 150; the FIRST corridor flight is 30.
+# Entering 2 gives you 2 cm/s.
+#
+# REBOOT after loading (PRX1_TYPE and OA_TYPE both need it).
+PRX1_TYPE        2
+# PRX1_YAW_CORR intentionally omitted: the yaw-correction param name is
+# version-specific (PRX1_YAWCORR on some builds) and MAVProxy rejects an
+# unknown name. It defaults to 0 = no correction, which is what we want since
+# we send body-frame. Gate 1C verifies this empirically.
+OA_TYPE          1
+OA_BR_TYPE       1
+OA_BR_LOOKAHEAD  4.0
+OA_MARGIN_MAX    1.2
+OA_DB_EXPIRE     3
+WPNAV_SPEED      100
+# Simple avoidance kept available for Loiter checks; harmless in AUTO.
+AVOID_ENABLE     7
+AVOID_MARGIN     1.2
+AVOID_BEHAVE     1
+# GCS failsafe = Land (5). Land, not RTL. RTL path may cross corridor walls:
+# an RTL triggered mid-corridor climbs to RTL_ALT and flies a straight line
+# home, hitting a 2 m wall if RTL_ALT is below wall height or the climb has not
+# finished. Land (5) sets down in place, recoverable. (The spec's 'Brake'
+# option does not exist on Copter FS_GCS_ENABLE — that is why the enum could
+# not be verified earlier.)
+FS_GCS_ENABLE    5

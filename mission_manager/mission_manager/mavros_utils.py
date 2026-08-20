@@ -219,29 +219,44 @@ def goto(
     lat: float,
     lon: float,
     altitude_m: float,
-    publish_count: int = 5,
+    publish_count: int = 20,
 ) -> bool:
     """
-    Publish a setpoint to /mavros/setpoint_position/global to navigate
+    Publish a setpoint to /mavros/setpoint_raw/global to navigate
     the vehicle to (lat, lon, altitude_m).
 
     Uses mavros_msgs/GlobalPositionTarget via the SET_POSITION_TARGET_GLOBAL_INT
     interface.  Requires GUIDED mode.
+
+    Fixes the "waypoint timeout" bug on two counts:
+
+    1. **Correct topic.** GlobalPositionTarget belongs on
+       ``/mavros/setpoint_raw/global`` (the setpoint_raw plugin). It was
+       previously published to ``/mavros/setpoint_position/global``, which
+       expects a geographic_msgs/GeoPoseStamped — a message-type mismatch, so
+       MAVROS never received the setpoint and the vehicle never moved.
+    2. **Persistent publisher + real stream.** The publisher is created once and
+       cached on the node (``node._goto_pub``); we stream ~2 s (20 samples at
+       10 Hz) instead of firing a 0.5 s burst on an ephemeral publisher that was
+       torn down before DDS discovery completed.
     """
     from mavros_msgs.msg import GlobalPositionTarget
     from std_msgs.msg import Header
 
     import time as _time
 
-    pub = node.create_publisher(
-        GlobalPositionTarget,
-        "/mavros/setpoint_position/global",
-        10,
-    )
+    # Persistent, cached publisher — do NOT recreate/destroy per call.
+    pub = getattr(node, "_goto_pub", None)
+    if pub is None:
+        pub = node.create_publisher(
+            GlobalPositionTarget,
+            "/mavros/setpoint_raw/global",
+            10,
+        )
+        node._goto_pub = pub
 
     msg = GlobalPositionTarget()
     msg.header = Header()
-    msg.header.stamp = node.get_clock().now().to_msg()
     msg.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
     msg.type_mask = (
         GlobalPositionTarget.IGNORE_VX |
@@ -256,8 +271,9 @@ def goto(
     msg.longitude = lon
     msg.altitude = altitude_m
 
-    # Publish a few times to make sure the FCU accepts it
-    # Use time.sleep instead of spin_once — safe from background threads
+    # Stream the target so ArduPilot GUIDED latches it.
+    # time.sleep (not spin_once) — safe from a background thread while the
+    # main thread spins the node.
     for _ in range(publish_count):
         msg.header.stamp = node.get_clock().now().to_msg()
         pub.publish(msg)
@@ -268,8 +284,8 @@ def goto(
         f"alt={altitude_m:.1f} m"
     )
 
-    # Clean up the publisher
-    node.destroy_publisher(pub)
+    # Publisher is intentionally kept alive (cached on the node) so the next
+    # goto reuses it without re-running DDS discovery.
     return True
 
 

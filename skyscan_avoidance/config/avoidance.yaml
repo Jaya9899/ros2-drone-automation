@@ -1,0 +1,57 @@
+# skyscan_avoidance — single source of truth for every node.
+# No magic numbers live in node code; everything tunable is here.
+# Applied to all nodes via the "/**" wildcard namespace.
+/**:
+  ros__parameters:
+    # --- binning ---
+    n_bins: 72
+    bin_width_deg: 5.0
+
+    # --- vertical band ---
+    band_half_angle_deg: 3.0        # narrow: wider bands see the floor when pitched
+    pitch_compensation: true
+    # Fixed camera-to-FC mounting pitch bias (deg), subtracted from the IMU
+    # pitch before computing v_horizon. The IMU lives in the FC, so any constant
+    # camera-mount misalignment is a fixed bias in the horizon row. Calibrate
+    # once with scripts/calibrate_camera_pitch.py (Gate 3C). Positive = camera
+    # tilted DOWN relative to the FC.
+    camera_pitch_offset_deg: 0.0
+
+    # --- range gating ---
+    range_min_m: 0.40               # OAK-D Lite ~0.35 m min at 400P, 7.5 cm baseline
+    range_max_report_m: 6.0         # obstacles beyond this are not reported
+    range_max_valid_m: 15.0         # used ONLY for coverage accounting, see 4.3
+
+    # --- validity ---
+    min_valid_px_fraction_per_bin: 0.15
+    ground_reject_height_m: -0.40   # relative to camera, negative = below
+    ceiling_reject_height_m: 0.80
+
+    # --- rates ---
+    publish_rate_hz: 10.0
+    # sensor_live cutoff: no /avoidance/scan within this -> sensor_live False.
+    # 0.40 s = 4 missed frames at 10 Hz, above normal Pi 5 ROS jitter (0.20 s
+    # was 2 frames and false-tripped, costing a full recover-hold each time).
+    depth_stale_timeout_s: 0.40
+    # Builder's own scan watchdog. The guard asserts at startup that
+    # depth_stale_timeout_s + 0.15 <= this (>= one 10 Hz frame of margin);
+    # raised 0.50 -> 0.60 to satisfy it rather than lowering the guard.
+    depth_watchdog_timeout_s: 0.60  # stop publishing LaserScan entirely
+
+    # --- frames ---
+    scan_frame_id: "oak_forward"    # must exist in the TF tree for RViz to render the scan
+
+    # --- coverage guard (Stage 4) ---
+    # The corridor (3.5 m wide, side walls, OPEN TOP, GPS available) is flown
+    # with waypoints + BendyRuler, same as the arena. There is NO reactive
+    # corridor controller and nothing in this package publishes velocity
+    # setpoints. The guard asserts sensor health as two Bools (sensor_live,
+    # coverage_ok); it commands the vehicle in no way.
+    guard_rate_hz: 10.0
+    coverage_min_valid: 0.40       # coverage below this -> coverage_ok False.
+                                   # PLACEHOLDER until Gate 0D measures the real baseline outdoors.
+    coverage_recover_hold_s: 1.0
+    viz_margin_ring_m: 1.2         # matches OA_MARGIN_MAX
+
+    # --- sim only ---
+    sim_dropout_fraction: 0.0       # inject random invalid pixels to fake textureless walls
