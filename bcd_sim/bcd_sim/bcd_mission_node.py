@@ -6,8 +6,8 @@ the BCD pattern using MAVROS goto + wait_for_arrival.
 
 Usage (3 terminals):
   T1: cd ~/ardupilot/Tools/autotest && python3 sim_vehicle.py -v ArduCopter -f quad --no-mavproxy -l 12.9716,77.5946,0,0
-  T2: source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5760
-  T3: source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && python3 ~/ros2_ws/src/bcd_sim/bcd_sim/bcd_mission_node.py
+  T2: source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5760
+  T3: source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && python3 ~/ros2_ws/src/bcd_sim/bcd_sim/bcd_mission_node.py
 """
 
 import math, time, threading

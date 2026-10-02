@@ -72,7 +72,7 @@ echo "  SITL started"
 echo ""
 echo "► Starting MAVROS..."
 gnome-terminal --title="MAVROS" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5760
 exec bash" 2>/dev/null
@@ -92,7 +92,7 @@ fi
 echo ""
 echo "► Starting ROS2 mission stack..."
 gnome-terminal --title="Mission Stack" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 ros2 launch mission_manager sitl_mission.launch.py
 exec bash" 2>/dev/null
@@ -101,7 +101,7 @@ exec bash" 2>/dev/null
 echo ""
 echo "► Starting telemetry monitor..."
 gnome-terminal --title="Telemetry" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 echo 'Telemetry feed — /telemetry/combined'
 echo '──────────────────────────────────────'

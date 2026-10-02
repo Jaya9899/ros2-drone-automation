@@ -40,7 +40,7 @@ echo "  PX4 started"
 # Terminal 2: MAVROS
 echo "► Starting MAVROS..."
 gnome-terminal --title="MAVROS" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14540@127.0.0.1:14580 -p gcs_url:=udp://@127.0.0.1:14550
 exec bash" 2>/dev/null
@@ -51,7 +51,7 @@ echo "  MAVROS started"
 # Terminal 3: BCD Node + RViz2
 echo "► Starting PX4 BCD Mission Node + RViz2..."
 gnome-terminal --title="BCD Mission" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 echo 'Starting BCD mission node...'
 python3 ${BCD_NODE} &

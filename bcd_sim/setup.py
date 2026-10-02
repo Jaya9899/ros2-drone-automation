@@ -19,6 +19,15 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    maintainer='you',
+    maintainer_email='you@example.com',
+    description='BCD simulation for drone coverage',
+    license='MIT',
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     entry_points={
         'console_scripts': [
             'bcd_planner = bcd_sim.bcd_planner:main',

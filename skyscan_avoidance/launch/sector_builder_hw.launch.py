@@ -2,9 +2,9 @@
 #
 # Runs sector_builder_node on the depthai_ros_driver topics and publishes the
 # static camera TF. It does NOT start the DepthAI driver — that is a separate,
-# already-installed package (depthai_ros_driver v2.9.0); launch it on its own so
-# the two lifecycles stay independent. Depth arrives as 16UC1 (millimetres) on
-# hardware; the builder handles the units from the encoding.
+# already-installed package (depthai_ros_driver v2.12.2 on Jazzy); launch it on
+# its own so the two lifecycles stay independent. Depth arrives as 16UC1
+# (millimetres) on hardware; the builder handles the units from the encoding.
 #
 # The driver MUST be started with our params file. Its defaults publish 1280x720
 # intrinsics alongside a 640x480 depth image on this camera, which silently
@@ -79,8 +79,12 @@ def _setup(context, *args, **kwargs):
         package='tf2_ros',
         executable='static_transform_publisher',
         name='oak_forward_tf',
-        arguments=['0.1', '0.0', '0.0', '0', '0', '0',
-                   'base_link', 'oak_forward'],
+        # Named flags: the old-style positional form (x y z yaw pitch roll
+        # frame child) is deprecated and warns on Jazzy.
+        arguments=['--x', '0.1', '--y', '0.0', '--z', '0.0',
+                   '--yaw', '0', '--pitch', '0', '--roll', '0',
+                   '--frame-id', 'base_link',
+                   '--child-frame-id', 'oak_forward'],
     ))
 
     return nodes

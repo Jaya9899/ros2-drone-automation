@@ -55,7 +55,7 @@ def load_mission_config(node) -> MissionConfig:
     # ── Speeds ───────────────────────────────────────────────────
     cfg.corridor_speed_ms     = _declare(node, "corridor_speed_ms", 2.0)
     cfg.corridor_obs_speed_ms = _declare(node, "corridor_obs_speed_ms", 1.0)
-    cfg.arena_speed_ms        = _declare(node, "arena_speed_ms", 1.5)
+    cfg.arena_speed_ms        = _declare(node, "arena_speed_ms", 3.0)
 
     # ── GPS Origin ───────────────────────────────────────────────
     cfg.origin_lat            = _declare(node, "origin_lat", 12.9716)

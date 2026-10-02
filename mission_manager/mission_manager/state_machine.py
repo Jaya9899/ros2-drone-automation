@@ -129,6 +129,7 @@ class MissionSM(StateMachine):
             from mission_manager.srv_helpers import call_run_lawnmower, call_start_qr_scan
             import threading
             timeout = self._c("service_timeout_s", 10.0)
+            speed = self._c("arena_speed_ms", 3.0)
             # Start QR scan BEFORE lawnmower so detections work immediately
             call_start_qr_scan(self.ros_node, target_qr_id=self.mission_target_qr,
                                timeout=timeout)

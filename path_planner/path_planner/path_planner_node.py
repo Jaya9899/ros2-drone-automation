@@ -290,9 +290,17 @@ class PathPlannerNode(Node):
         If RL avoidance is enabled, each waypoint is passed through the
         RL correction layer before being sent to MAVROS.
         """
+        import os
         import sys
-        # Ensure mission_manager is in path for imports
-        sys.path.insert(0, '/home/jaya9899/ros2_ws/install/mission_manager/lib/python3.10/site-packages')
+        from glob import glob
+        # Ensure mission_manager is in path for imports. The site-packages dir
+        # is named after the interpreter (python3.12 on Jazzy), so glob it
+        # rather than hardcoding a version.
+        for _sp in sorted(glob(os.path.join(
+                os.path.expanduser('~'), 'ros2_ws', 'install', 'mission_manager',
+                'lib', 'python3*', 'site-packages'))):
+            if _sp not in sys.path:
+                sys.path.insert(0, _sp)
         from mission_manager.mavros_utils import goto, wait_for_arrival
 
         # At least 16s per waypoint to give SITL time to manoeuvre

@@ -36,7 +36,7 @@ echo "  SITL started"
 # Terminal 2: MAVROS
 echo "► Starting MAVROS..."
 gnome-terminal --title="MAVROS" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5760
 exec bash" 2>/dev/null
@@ -47,7 +47,7 @@ echo "  MAVROS started"
 # Terminal 3: BCD Node + RViz2
 echo "► Starting BCD Mission Node + RViz2..."
 gnome-terminal --title="BCD Mission" -- bash -c "
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
 echo 'Starting BCD mission node...'
 python3 ${BCD_NODE} &

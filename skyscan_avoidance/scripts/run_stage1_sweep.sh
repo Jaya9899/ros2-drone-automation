@@ -32,7 +32,7 @@ fail(){ echo "FATAL: $*" >&2; exit 1; }
 
 # ROS setup scripts reference unset vars; disable nounset while sourcing them.
 set +u
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 source "$WS/install/setup.bash"
 set -u
 

@@ -17,7 +17,11 @@ setup(
     maintainer_email='jaya9899@todo.todo',
     description='Common vehicle control interface for ROS2 and MAVROS-backed vehicles',
     license='TODO: License declaration',
-    tests_require=['pytest'],
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     entry_points={
         'console_scripts': [],
     },
