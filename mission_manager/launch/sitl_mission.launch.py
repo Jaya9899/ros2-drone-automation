@@ -49,7 +49,7 @@ def generate_launch_description():
     fcu_url_arg = DeclareLaunchArgument(
         "fcu_url",
         default_value="tcp://127.0.0.1:5760",
-        description="MAVROS FCU URL for SITL",
+        description="MAVROS FCU URL (SITL tcp, or serial device:baud for hardware)",
     )
 
     # ================================================================

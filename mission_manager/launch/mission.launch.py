@@ -42,6 +42,13 @@ def generate_launch_description():
         description="Launch MAVROS (set false if started separately)"
     )
 
+    # SITL default. Pixhawk over USB: /dev/ttyACM0:115200
+    # Pixhawk TELEM2 -> Pi 5 GPIO UART: /dev/ttyAMA0:921600
+    fcu_url_arg = DeclareLaunchArgument(
+        "fcu_url", default_value="tcp://127.0.0.1:5760",
+        description="MAVROS FCU URL (SITL tcp, or serial device:baud for hardware)"
+    )
+
     # ================================================================
     # MAVROS (optional — usually started separately with SITL)
     # ================================================================
@@ -52,7 +59,7 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            "fcu_url": "tcp://127.0.0.1:5760",
+            "fcu_url": LaunchConfiguration("fcu_url"),
         }.items(),
         condition=IfCondition(
             LaunchConfiguration("launch_mavros")
@@ -121,8 +128,15 @@ def generate_launch_description():
 
 
     # ================================================================
-    # OAK-D camera driver (depthai-ros)
+    # OAK-D Lite camera driver (depthai-ros)
     # ================================================================
+    # MUST use skyscan_avoidance's params file. The driver defaults publish
+    # 1280x720 intrinsics next to a 640x480 depth image on the OAK-D Lite,
+    # which silently mis-bins every obstacle bearing, and the default RGBD
+    # pipeline's NN blob upload can crash the container. See the yaml header.
+    oak_params = os.path.join(
+        get_package_share_directory("skyscan_avoidance"),
+        "config", "oak_d_lite_depth.yaml")
     oakd_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -130,8 +144,9 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            "name": "oak",
-            "camera_model": "OAK-D",
+            "name": "oak",  # must match the /oak: key in oak_params
+            "camera_model": "OAK-D-LITE",
+            "params_file": oak_params,
         }.items(),
     )
 
@@ -141,6 +156,10 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim,
         launch_mavros_arg,
+        fcu_url_arg,
+
+        # MAVROS (only if launch_mavros:=true)
+        mavros_launch,
 
         # Start safety monitor first (always running)
         safety_monitor,
