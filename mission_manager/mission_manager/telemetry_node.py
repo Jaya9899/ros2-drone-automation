@@ -19,6 +19,15 @@ from geometry_msgs.msg import PoseStamped, TwistStamped
 from mission_manager.config_loader import load_mission_config
 
 
+def _finite(obj):
+    """Replace NaN/inf floats with None, recursively."""
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
+
+
 class TelemetryNode(Node):
     def __init__(self):
         super().__init__("telemetry_node")
@@ -78,11 +87,7 @@ class TelemetryNode(Node):
         )
 
         # ── Publish timer ────────────────────────────────────────
-        rate = self.cfg.tick_rate_hz  # reuse tick_rate or dedicated
-        try:
-            rate = self.get_parameter("publish_rate_hz").value
-        except Exception:
-            pass
+        rate = float(self.declare_parameter("publish_rate_hz", self.cfg.tick_rate_hz).value)
         self.create_timer(1.0 / rate, self._publish_tick)
 
         self.get_logger().info(
@@ -157,7 +162,8 @@ class TelemetryNode(Node):
         }
 
         msg = String()
-        msg.data = json.dumps(data)
+        # NaN (e.g. unknown battery percentage) is not valid JSON.
+        msg.data = json.dumps(_finite(data), allow_nan=False)
         self._pub.publish(msg)
 
 
@@ -170,4 +176,5 @@ def main(args=None):
         node.get_logger().info("[telemetry] Shutting down")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

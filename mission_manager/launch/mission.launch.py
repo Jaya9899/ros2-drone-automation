@@ -1,18 +1,23 @@
-# mission.launch.py — Master launch file for Aerothon UAS Mission 2
+# mission.launch.py — Master launch file for Aerothon UAS Mission 2 (hardware)
 #
-# Launches the full mission stack in a single command:
-#   ros2 launch mission_manager mission.launch.py
+#   ros2 launch mission_manager mission.launch.py launch_mavros:=true \
+#       fcu_url:=/dev/ttyAMA0:921600 launch_camera:=true
 #
-# Navigation uses direct MAVROS waypoint publishing.
-# RL-based obstacle avoidance can be enabled via config (placeholder).
-# MAVROS and SITL must still be started separately.
+# Starts: MAVROS (optional), safety monitor, telemetry, path planner, payload,
+# QR scanner, the OAK-D Lite driver + skyscan_avoidance obstacle pipeline
+# (sector_builder -> OBSTACLE_DISTANCE to ArduPilot, coverage_guard health
+# Bools), the RPi Camera 3 driver (optional), and finally the mission node.
+#
+# Pi 5 <-> Pixhawk 6C Mini on TELEM2 (GPIO14/15 UART0):
+#   /boot/firmware/config.txt: dtparam=uart0=on  (gives /dev/ttyAMA0 on Pi 5)
+#   FC: SERIAL2_PROTOCOL=2, SERIAL2_BAUD=921
+# USB instead: fcu_url:=/dev/ttyACM0:115200
 
 import os
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    GroupAction,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -27,116 +32,86 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    # ----- Paths -----
     mission_mgr_share = get_package_share_directory("mission_manager")
     mission_params = os.path.join(mission_mgr_share, "config", "mission_params.yaml")
 
     # ----- Launch arguments -----
-    use_sim = DeclareLaunchArgument(
-        "use_sim", default_value="true",
-        description="Use simulation time"
-    )
-
     launch_mavros_arg = DeclareLaunchArgument(
         "launch_mavros", default_value="false",
-        description="Launch MAVROS (set false if started separately)"
-    )
-
-    # SITL default. Pixhawk over USB: /dev/ttyACM0:115200
-    # Pixhawk TELEM2 -> Pi 5 GPIO UART: /dev/ttyAMA0:921600
+        description="Launch MAVROS (set false if started separately)")
     fcu_url_arg = DeclareLaunchArgument(
         "fcu_url", default_value="tcp://127.0.0.1:5760",
-        description="MAVROS FCU URL (SITL tcp, or serial device:baud for hardware)"
-    )
+        description="MAVROS FCU URL (SITL tcp, or serial device:baud for hardware)")
+    launch_camera_arg = DeclareLaunchArgument(
+        "launch_camera", default_value="false",
+        description="Start camera_ros for the downward RPi Camera Module 3 "
+                    "(needs camera_ros built against Raspberry Pi's libcamera)")
+    camera_arg = DeclareLaunchArgument(
+        "camera", default_value="0",
+        description="libcamera camera index or name for the downward camera")
 
     # ================================================================
-    # MAVROS (optional — usually started separately with SITL)
+    # MAVROS (Jazzy ships apm.launch as XML -> AnyLaunchDescriptionSource)
     # ================================================================
     mavros_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare("mavros"), "launch", "apm.launch"
-            ])
+            PathJoinSubstitution([FindPackageShare("mavros"), "launch", "apm.launch"])
         ]),
-        launch_arguments={
-            "fcu_url": LaunchConfiguration("fcu_url"),
-        }.items(),
-        condition=IfCondition(
-            LaunchConfiguration("launch_mavros")
-        ),
+        launch_arguments={"fcu_url": LaunchConfiguration("fcu_url")}.items(),
+        condition=IfCondition(LaunchConfiguration("launch_mavros")),
     )
 
+    def mission_node_of(package, executable, extra_params=()):
+        return Node(
+            package=package,
+            executable=executable,
+            name=executable,
+            output="screen",
+            parameters=[mission_params, *extra_params],
+        )
+
+    safety_monitor = mission_node_of("mission_manager", "safety_monitor")
+    telemetry_node = mission_node_of("mission_manager", "telemetry_node")
+    path_planner_node = mission_node_of("path_planner", "path_planner_node")
+    payload_node = mission_node_of("payload", "payload_node")
+    qr_scanner_node = mission_node_of("perception", "qr_scanner_node")
+    mission_node = mission_node_of("mission_manager", "mission_node")
+    # perception/depth_processor_node is NOT started: skyscan_avoidance is the
+    # obstacle pipeline, and a second full-frame depth consumer costs Pi 5 CPU.
+
     # ================================================================
-    # Mission Manager nodes
+    # Downward camera: RPi Camera Module 3 via camera_ros
     # ================================================================
-    mission_node = Node(
-        package="mission_manager",
-        executable="mission_node",
-        name="mission_node",
+    # libcamera's RGB888 is laid out B,G,R in memory, which camera_ros
+    # publishes as "bgr8" — what qr_scanner_node converts to anyway.
+    down_camera = Node(
+        package="camera_ros",
+        executable="camera_node",
+        name="down_camera",
         output="screen",
-        parameters=[mission_params],
-    )
-
-    safety_monitor = Node(
-        package="mission_manager",
-        executable="safety_monitor",
-        name="safety_monitor",
-        output="screen",
-        parameters=[mission_params],
-    )
-
-    # ================================================================
-    # Path Planner
-    # ================================================================
-    path_planner_node = Node(
-        package="path_planner",
-        executable="path_planner_node",
-        name="path_planner_node",
-        output="screen",
-        parameters=[mission_params],
+        parameters=[{
+            "camera": LaunchConfiguration("camera"),
+            "width": 1280,
+            "height": 720,
+            "format": "RGB888",
+            "role": "video",
+        }],
+        remappings=[
+            ("~/image_raw", "/down_frame"),
+            ("~/camera_info", "/camera_info"),
+        ],
+        condition=IfCondition(LaunchConfiguration("launch_camera")),
     )
 
     # ================================================================
-    # Payload
-    # ================================================================
-    payload_node = Node(
-        package="payload",
-        executable="payload_node",
-        name="payload_node",
-        output="screen",
-        parameters=[mission_params],
-    )
-
-    # ================================================================
-    # Perception (QR scanner + depth processor)
-    # ================================================================
-    qr_scanner_node = Node(
-        package="perception",
-        executable="qr_scanner_node",
-        name="qr_scanner_node",
-        output="screen",
-        parameters=[mission_params],
-    )
-
-    depth_processor_node = Node(
-        package="perception",
-        executable="depth_processor_node",
-        name="depth_processor_node",
-        output="screen",
-        parameters=[mission_params],
-    )
-
-
-    # ================================================================
-    # OAK-D Lite camera driver (depthai-ros)
+    # OAK-D Lite driver (depthai-ros)
     # ================================================================
     # MUST use skyscan_avoidance's params file. The driver defaults publish
     # 1280x720 intrinsics next to a 640x480 depth image on the OAK-D Lite,
     # which silently mis-bins every obstacle bearing, and the default RGBD
     # pipeline's NN blob upload can crash the container. See the yaml header.
-    oak_params = os.path.join(
-        get_package_share_directory("skyscan_avoidance"),
-        "config", "oak_d_lite_depth.yaml")
+    skyscan_share = get_package_share_directory("skyscan_avoidance")
+    oak_params = os.path.join(skyscan_share, "config", "oak_d_lite_depth.yaml")
     oakd_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -151,36 +126,30 @@ def generate_launch_description():
     )
 
     # ================================================================
-    # Assemble launch description
+    # Obstacle pipeline -> ArduPilot proximity (PRX1_TYPE=2) + health Bools
     # ================================================================
+    avoidance_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(skyscan_share, "launch", "sector_builder_hw.launch.py")),
+        launch_arguments={"obstacle_path": "sink"}.items(),
+    )
+
     return LaunchDescription([
-        use_sim,
         launch_mavros_arg,
         fcu_url_arg,
+        launch_camera_arg,
+        camera_arg,
 
-        # MAVROS (only if launch_mavros:=true)
         mavros_launch,
-
-        # Start safety monitor first (always running)
         safety_monitor,
-
-        # Start payload node
+        telemetry_node,
         payload_node,
-
-        # Start path planner
         path_planner_node,
-
-        # Start perception nodes
         qr_scanner_node,
-        depth_processor_node,
-
-        # Start OAK-D driver
+        down_camera,
         oakd_launch,
+        avoidance_launch,
 
-        # Start mission node last (it begins the state machine)
-        # Delay by 5 seconds to let other nodes initialize
-        TimerAction(
-            period=5.0,
-            actions=[mission_node],
-        ),
+        # Mission node last; it also waits for MAVROS + the pilot's switch.
+        TimerAction(period=5.0, actions=[mission_node]),
     ])

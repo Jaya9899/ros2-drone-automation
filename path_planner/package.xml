@@ -14,6 +14,7 @@
   <depend>geographic_msgs</depend>
   <depend>mavros_msgs</depend>
   <depend>mission_manager</depend>
+  <exec_depend>python3-shapely</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

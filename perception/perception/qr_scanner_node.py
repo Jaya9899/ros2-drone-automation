@@ -23,7 +23,8 @@ Services (called by mission_manager/srv_helpers.py):
 
 Subscriptions:
     /down_frame             (sensor_msgs/Image)     — camera frames
-    /vehicle_state          (geometry_msgs/PoseStamped) — current NED position + altitude
+    /mavros/global_position/rel_alt     (std_msgs/Float64) — altitude above home
+    /mavros/global_position/compass_hdg (std_msgs/Float64) — heading, deg CW from North
     /qr_scanner/mode        (std_msgs/String)        — manual mode override
     /qr_scanner/delivery_id (std_msgs/String)        — inject stored ID (Phase 5)
     /mavros/global_position/global (sensor_msgs/NavSatFix) — GPS for detection publishing
@@ -35,19 +36,23 @@ Publications:
     /target_waypoint        (geometry_msgs/Point)    — target NED position (Phase 5)
     /qr_scanner/stop_move   (std_msgs/Bool)          — True when confidence > stop threshold
     /qr_scanner/status      (std_msgs/String)        — human-readable status for debugging
-    /qr/detection           (std_msgs/String)        — "content|lat|lon" for mission_node
+    /qr/detection           (std_msgs/String)        — "content|qr_lat|qr_lon" for mission_node,
+                                                       published ONLY after the confirmation gate
 
 Parameters (set via ROS2 param file or command line):
     gate_required       int   (default 3)    — frames for confirmation gate
     min_confidence      float (default 0.5)  — minimum confidence to enter gate
     stop_confidence     float (default 0.7)  — confidence to trigger movement stop
-    delivery_altitude   float (default 10.0) — hover altitude in metres for projection
+    delivery_altitude   float (default 5.0)  — fallback altitude when rel_alt is unavailable
+    scan_timeout_s      float (default 60.0) — Phase 2 service timeout
+    cam_yaw_offset_deg  float (default 0.0)  — image-top direction vs nose, deg clockwise
     camera_fx/fy/cx/cy  float                — camera intrinsics from calibration
 
 ROS2 dependencies:
     rclpy, sensor_msgs, std_msgs, std_srvs, geometry_msgs, cv_bridge
 """
 
+import math
 import threading
 
 import rclpy
@@ -56,9 +61,9 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg   import Image, CameraInfo, NavSatFix
-from std_msgs.msg      import String, Int32, Bool
+from std_msgs.msg      import String, Int32, Bool, Float64
 from std_srvs.srv      import Trigger
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point
 
 from cv_bridge import CvBridge
 
@@ -66,7 +71,6 @@ from cv_bridge import CvBridge
 from perception.qr_pipeline import (
     preprocess,
     detect_qr,
-    quad_confidence,
     store_delivery_id,
     find_matching_qr,
     project_to_ned,
@@ -101,7 +105,9 @@ class QRScannerNode(Node):
         self.declare_parameter("gate_required",     3)
         self.declare_parameter("min_confidence",    0.5)
         self.declare_parameter("stop_confidence",   0.7)
-        self.declare_parameter("delivery_altitude", 10.0)
+        self.declare_parameter("delivery_altitude", 5.0)
+        self.declare_parameter("scan_timeout_s",    60.0)
+        self.declare_parameter("cam_yaw_offset_deg", 0.0)
         # Camera intrinsics — must be set from calibration or /camera_info
         # Defaults are approximate for RPi Camera Module 3 at 1280x720
         self.declare_parameter("camera_fx", 920.0)
@@ -113,6 +119,8 @@ class QRScannerNode(Node):
         self._min_confidence    = self.get_parameter("min_confidence").value
         self._stop_confidence   = self.get_parameter("stop_confidence").value
         self._delivery_altitude = self.get_parameter("delivery_altitude").value
+        self._scan_timeout_s    = float(self.get_parameter("scan_timeout_s").value)
+        self._cam_yaw_offset    = float(self.get_parameter("cam_yaw_offset_deg").value)
         self._fx = self.get_parameter("camera_fx").value
         self._fy = self.get_parameter("camera_fy").value
         self._cx = self.get_parameter("camera_cx").value
@@ -123,7 +131,8 @@ class QRScannerNode(Node):
         self._gate          = ConfirmationGate(required=self._gate_required)
         self._delivery_id   : str | None = None   # set after Phase 2 confirms
         self._stop_sent     : bool       = False   # Phase 5 stop trigger (one-shot)
-        self._current_alt   : float      = self._delivery_altitude
+        self._current_alt   : float | None = None   # rel_alt, metres above home
+        self._heading_deg   : float | None = None   # compass heading
         self._bridge        = CvBridge()
         self._current_gps   = [None, None]  # [lat, lon] from MAVROS
 
@@ -142,6 +151,12 @@ class QRScannerNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         mavros_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -157,10 +172,12 @@ class QRScannerNode(Node):
             String, "/qr_scanner/mode", self._mode_cb, reliable_qos)
 
         self.create_subscription(
-            String, "/qr_scanner/delivery_id", self._delivery_id_cb, reliable_qos)
+            String, "/qr_scanner/delivery_id", self._delivery_id_cb, latched_qos)
 
         self.create_subscription(
-            PoseStamped, "/vehicle_state", self._vehicle_state_cb, sensor_qos)
+            Float64, "/mavros/global_position/rel_alt", self._rel_alt_cb, mavros_qos)
+        self.create_subscription(
+            Float64, "/mavros/global_position/compass_hdg", self._heading_cb, mavros_qos)
 
         self.create_subscription(
             CameraInfo, "/camera_info", self._camera_info_cb, reliable_qos)
@@ -209,7 +226,7 @@ class QRScannerNode(Node):
         Phase 2: Scan reference QR at takeoff zone.
         Blocks until the confirmation gate fires, then returns the decoded ID.
 
-        Called by: srv_helpers.call_scan_reference_qr()
+        Called by: mission_node._scan_reference_qr()
         """
         self.get_logger().info("[qr_scanner] /perception/scan_qr called — activating PHASE2")
 
@@ -221,8 +238,9 @@ class QRScannerNode(Node):
         self._mode = self.MODE_PHASE2
         self._publish_status("PHASE2_ACTIVE")
 
-        # Block until Phase2 confirms or timeout (60s)
-        confirmed = self._phase2_done_event.wait(timeout=60.0)
+        # Block until Phase2 confirms or timeout. mission_node waits longer
+        # than this (qr_scan_timeout_s + margin), so it always gets an answer.
+        confirmed = self._phase2_done_event.wait(timeout=self._scan_timeout_s)
 
         if confirmed and self._phase2_result:
             response.success = True
@@ -243,7 +261,7 @@ class QRScannerNode(Node):
         Phase 5: Start async QR scanning during arena search.
         Returns immediately — detections are published to /qr/detection.
 
-        Called by: srv_helpers.call_start_qr_scan()
+        Called by: mission_node._arena_search()
         """
         self.get_logger().info(
             "[qr_scanner] /perception/start_qr_scan called — activating PHASE5"
@@ -283,20 +301,22 @@ class QRScannerNode(Node):
 
     def _delivery_id_cb(self, msg: String) -> None:
         """
-        Allow the FSM to inject the Delivery ID directly for Phase 5.
-        In normal operation, Phase 2 publishes to /delivery_id which the
-        FSM stores and re-publishes here when activating Phase 5.
+        The mission FSM publishes the target ID it locked before Phase 5.
+        The FSM is the authority: its ID replaces whatever Phase 2 stored
+        (they are the same in normal operation).
         """
-        if self._delivery_id is None and msg.data.strip():
-            self._delivery_id = msg.data.strip()
+        new_id = msg.data.strip()
+        if new_id and new_id != self._delivery_id:
+            self._delivery_id = new_id
             self.get_logger().info(
-                f"[qr_scanner] Delivery ID injected for Phase 5: '{self._delivery_id}'"
+                f"[qr_scanner] Delivery ID set for Phase 5: '{self._delivery_id}'"
             )
 
-    def _vehicle_state_cb(self, msg: PoseStamped) -> None:
-        """Update current altitude for NED projection."""
-        # PoseStamped z is altitude in NED convention (positive up)
-        self._current_alt = abs(msg.pose.position.z)
+    def _rel_alt_cb(self, msg: Float64) -> None:
+        self._current_alt = float(msg.data)
+
+    def _heading_cb(self, msg: Float64) -> None:
+        self._heading_deg = float(msg.data)
 
     def _camera_info_cb(self, msg: CameraInfo) -> None:
         """Update camera intrinsics from /camera_info if available."""
@@ -397,7 +417,8 @@ class QRScannerNode(Node):
         if self._delivery_id is None:
             self.get_logger().warn(
                 "[qr_scanner] [Phase 5] No Delivery ID set — cannot match. "
-                "Publish ID to /qr_scanner/delivery_id first."
+                "Publish ID to /qr_scanner/delivery_id first.",
+                throttle_duration_sec=5.0,
             )
             return
 
@@ -424,34 +445,37 @@ class QRScannerNode(Node):
                 f"[qr_scanner] [Phase 5] TARGET CONFIRMED: '{self._gate.confirmed}'"
             )
 
-            # ── Project to NED ────────────────────────────────────────────────
+            # ── Project the QR to a ground position ───────────────────────────
             pts = matching["points"]
             u, v = quad_centroid(pts)
-            altitude = self._current_alt if self._current_alt > 1.0 \
-                       else self._delivery_altitude
+            altitude = self._current_alt if (self._current_alt or 0.0) > 1.0 \
+                else self._delivery_altitude
+            heading = self._heading_deg if self._heading_deg is not None else 0.0
+            if self._heading_deg is None:
+                self.get_logger().warn("[qr_scanner] [Phase 5] No heading — assuming North")
 
-            dx, dy = project_to_ned(
+            d_north, d_east = project_to_ned(
                 pixel_u=u, pixel_v=v,
                 altitude_m=altitude,
                 cx=self._cx, cy=self._cy,
                 fx=self._fx, fy=self._fy,
+                heading_deg=heading,
+                cam_yaw_offset_deg=self._cam_yaw_offset,
             )
 
             target = Point()
-            target.x = dx
-            target.y = dy
+            target.x = d_north
+            target.y = d_east
             target.z = 0.0
             self._pub_target.publish(target)
 
-            # ── Publish to /qr/detection for mission_node ─────────────────────
-            # Format: "content|lat|lon"
+            # ── Publish "content|qr_lat|qr_lon" for mission_node ──────────────
             if self._current_gps[0] is not None:
+                lat0, lon0 = self._current_gps
+                qr_lat = lat0 + d_north / 111_320.0
+                qr_lon = lon0 + d_east / (111_320.0 * math.cos(math.radians(lat0)))
                 det_msg = String()
-                det_msg.data = (
-                    f"{self._gate.confirmed}|"
-                    f"{self._current_gps[0]:.7f}|"
-                    f"{self._current_gps[1]:.7f}"
-                )
+                det_msg.data = f"{self._gate.confirmed}|{qr_lat:.7f}|{qr_lon:.7f}"
                 self._pub_qr_detection.publish(det_msg)
                 self.get_logger().info(
                     f"[qr_scanner] [Phase 5] Published /qr/detection: {det_msg.data}"
@@ -462,28 +486,18 @@ class QRScannerNode(Node):
                 )
 
             self.get_logger().info(
-                f"[qr_scanner] [Phase 5] NED offset: dx={dx:.3f}m, dy={dy:.3f}m "
-                f"(alt={altitude:.1f}m, pixel=({u:.0f},{v:.0f}))"
+                f"[qr_scanner] [Phase 5] offset N={d_north:.2f} m, E={d_east:.2f} m "
+                f"(alt={altitude:.1f} m, hdg={heading:.0f}, pixel=({u:.0f},{v:.0f}))"
             )
 
             self._publish_status(
-                f"PHASE5_CONFIRMED target_dx={dx:.3f} target_dy={dy:.3f}"
+                f"PHASE5_CONFIRMED d_north={d_north:.2f} d_east={d_east:.2f}"
             )
-            self._mode = self.MODE_IDLE   # FSM takes over for descent
+            self._mode = self.MODE_IDLE   # FSM takes over for the drop
 
         else:
-            # Publish any detection (even non-confirmed) to /qr/detection
-            # so mission_node can react to partial matches
-            for det in detections:
-                if self._current_gps[0] is not None:
-                    det_msg = String()
-                    det_msg.data = (
-                        f"{det['data']}|"
-                        f"{self._current_gps[0]:.7f}|"
-                        f"{self._current_gps[1]:.7f}"
-                    )
-                    self._pub_qr_detection.publish(det_msg)
-
+            # Unconfirmed detections are NOT published to /qr/detection: a
+            # single-frame misread must never trigger the drop.
             status_parts = [f"PHASE5_SCANNING gate={self._gate.progress}"]
             if detections:
                 status_parts.append(

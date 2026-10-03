@@ -1,4 +1,3 @@
-import math
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,7 +9,7 @@ from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import GlobalPositionTarget, State
 from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Float32, Header
+from std_msgs.msg import Float64, Header
 
 
 class VehicleInterface:
@@ -69,8 +68,10 @@ class VehicleInterface:
                 self._sensor_qos,
             )
         if self._heading_sub is None:
+            # MAVROS publishes compass_hdg as std_msgs/Float64; a Float32
+            # subscriber never matches and silently receives nothing.
             self._heading_sub = self.node.create_subscription(
-                Float32,
+                Float64,
                 self.namespace + "/global_position/compass_hdg",
                 self._heading_cb,
                 self._sensor_qos,
@@ -86,7 +87,7 @@ class VehicleInterface:
     def _pose_cb(self, msg: PoseStamped) -> None:
         self._last_altitude = float(msg.pose.position.z)
 
-    def _heading_cb(self, msg: Float32) -> None:
+    def _heading_cb(self, msg: Float64) -> None:
         self._last_heading = float(msg.data)
 
     def _call_service(self, srv_type, srv_name: str, request, timeout: float = 10.0):
@@ -203,6 +204,8 @@ class VehicleInterface:
             | GlobalPositionTarget.IGNORE_AFY
             | GlobalPositionTarget.IGNORE_AFZ
             | GlobalPositionTarget.IGNORE_YAW_RATE
+            # Unmasked yaw with yaw=0.0 would force the nose to face East.
+            | GlobalPositionTarget.IGNORE_YAW
         )
         msg.latitude = float(lat)
         msg.longitude = float(lon)

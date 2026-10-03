@@ -10,6 +10,7 @@
 #       -p qr_location_lat:=12.9718 -p qr_location_lon:=77.5948
 
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -45,7 +46,11 @@ class SitlQrSimulator(Node):
         self.det_radius = self.get_parameter("detection_radius_m").value
 
         # ── State ────────────────────────────────────────────────
-        self._detected = False  # only fire once
+        # Re-publish (throttled) for as long as the drone is in range. A
+        # one-shot detection is lost if it fires while mission_node is not
+        # yet in ARENA_SEARCH (e.g. while flying corridor 1 past the QR).
+        self._last_pub = 0.0
+        self._republish_period_s = 1.0
 
         # ── Publisher ────────────────────────────────────────────
         self._pub = self.create_publisher(String, "/qr/detection", 10)
@@ -74,14 +79,15 @@ class SitlQrSimulator(Node):
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     def _gps_cb(self, msg: NavSatFix):
-        if self._detected:
+        now = time.monotonic()
+        if now - self._last_pub < self._republish_period_s:
             return
 
         dist = self._haversine(msg.latitude, msg.longitude,
                                self.qr_lat, self.qr_lon)
 
         if dist <= self.det_radius:
-            self._detected = True
+            self._last_pub = now
             # Publish in the same format the perception node uses
             detection = f"{self.qr_content}|{self.qr_lat}|{self.qr_lon}"
             out = String()
@@ -102,4 +108,5 @@ def main(args=None):
         node.get_logger().info("[sitl_qr] Shutting down")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

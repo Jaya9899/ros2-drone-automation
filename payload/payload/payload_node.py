@@ -4,8 +4,16 @@
 #   /payload/release       — release the payload from the mechanism
 #
 # Hardware interface:
-#   Uses MAVROS /mavros/cmd/command to send MAVLink DO_SET_SERVO commands
-#   to control the release servo.
+#   MAVLink MAV_CMD_DO_SET_SERVO via MAVROS /mavros/cmd/command.
+#
+# FC setup (do this in Mission Planner, the node cannot do it for you):
+#   SERVO<release_channel>_FUNCTION = 0   (DO_SET_SERVO is ignored on an
+#                                          output assigned to any function)
+#   SERVO<release_channel>_TRIM     = release_pwm_lock, so the FC holds the
+#                                     mechanism LOCKED from boot even before
+#                                     this node is running.
+#   Check that output <release_channel> physically exists on the Pixhawk 6C
+#   Mini, or move release_channel to an output that does.
 #
 # Usage:
 #   ros2 run payload payload_node
@@ -14,105 +22,82 @@
 import time
 
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_srvs.srv import Trigger
+from mavros_msgs.srv import CommandLong
 
 from mission_manager.config_loader import load_mission_config
+
+MAV_CMD_DO_SET_SERVO = 183
 
 
 class PayloadNode(Node):
     def __init__(self):
         super().__init__("payload_node")
-
-        # ----- Load config -----
         self.cfg = load_mission_config(self)
 
-        # Convenience aliases for frequently accessed params
-        self.release_channel  = self.cfg.release_channel
-        self.release_pwm_open = self.cfg.release_pwm_open
-        self.release_pwm_lock = self.cfg.release_pwm_lock
-        self.release_pause    = self.cfg.release_pause_s
+        self.release_channel  = int(self.cfg.release_channel)
+        self.release_pwm_open = int(self.cfg.release_pwm_open)
+        self.release_pwm_lock = int(self.cfg.release_pwm_lock)
+        self.release_pause    = float(self.cfg.release_pause_s)
 
-        # ----- Internal state -----
         self.is_released = False
+        self._locked = False
 
-        # ----- MAVROS servo command client -----
-        try:
-            from mavros_msgs.srv import CommandLong
-            self._cmd_long_type = CommandLong
-            self.servo_client = self.create_client(
-                CommandLong, "/mavros/cmd/command"
-            )
-            self._has_mavros = True
-            self.get_logger().info(
-                "[payload] MAVROS CommandLong client created "
-                f"(release ch={self.release_channel})"
-            )
-        except ImportError:
-            self._has_mavros = False
-            self.servo_client = None
-            self.get_logger().warn(
-                "[payload] mavros_msgs not available — running in STUB mode"
-            )
+        # Service handler and client share a reentrant group so the client's
+        # response can be processed by another executor thread while the
+        # handler waits (no nested spinning).
+        self._cb_group = ReentrantCallbackGroup()
+        self.servo_client = self.create_client(
+            CommandLong, "/mavros/cmd/command", callback_group=self._cb_group)
+        self.create_service(Trigger, "/payload/release", self._handle_release,
+                            callback_group=self._cb_group)
 
-        # ----- Services -----
-        self.create_service(Trigger, "/payload/release",      self._handle_release)
-
-        # Lock release mechanism on startup
-        self._set_servo(self.release_channel, self.release_pwm_lock)
+        # Lock the mechanism as soon as MAVROS is reachable (it may start
+        # after us); retried every 2 s until confirmed.
+        self._lock_timer = self.create_timer(
+            2.0, self._try_lock, callback_group=self._cb_group)
 
         self.get_logger().info(
-            "[payload] Payload node ready — "
-            "services: /payload/release"
-        )
+            f"[payload] Ready — /payload/release (ch={self.release_channel}, "
+            f"open={self.release_pwm_open}, lock={self.release_pwm_lock})")
+
+    def _try_lock(self):
+        if self._locked or self.is_released:
+            self._lock_timer.cancel()
+            return
+        if self._set_servo(self.release_channel, self.release_pwm_lock, wait_s=0.5):
+            self._locked = True
+            self._lock_timer.cancel()
 
     # -----------------------------------------------------------------------
     # Servo helper — sends MAVLink DO_SET_SERVO via MAVROS CommandLong
     # -----------------------------------------------------------------------
-    def _set_servo(self, channel: int, pwm: int) -> bool:
-        """
-        Send a DO_SET_SERVO command through MAVROS.
-
-        MAVLink command 183 (MAV_CMD_DO_SET_SERVO):
-          param1 = servo instance/channel number
-          param2 = PWM value (µs)
-        """
-        if not self._has_mavros:
-            self.get_logger().info(
-                f"[payload] STUB: set_servo(ch={channel}, pwm={pwm})"
-            )
-            return True
-
-        if not self.servo_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error(
-                "[payload] /mavros/cmd/command service not available"
-            )
+    def _set_servo(self, channel: int, pwm: int, wait_s: float = 5.0) -> bool:
+        """param1 = servo output number, param2 = PWM (us)."""
+        if not self.servo_client.wait_for_service(timeout_sec=wait_s):
+            self.get_logger().warn("[payload] /mavros/cmd/command not available yet",
+                                   throttle_duration_sec=10.0)
             return False
 
-        req = self._cmd_long_type.Request()
+        req = CommandLong.Request()
         req.broadcast = False
-        req.command = 183  # MAV_CMD_DO_SET_SERVO
+        req.command = MAV_CMD_DO_SET_SERVO
         req.param1 = float(channel)
         req.param2 = float(pwm)
-        req.param3 = 0.0
-        req.param4 = 0.0
-        req.param5 = 0.0
-        req.param6 = 0.0
-        req.param7 = 0.0
 
         future = self.servo_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        deadline = time.time() + 5.0
+        while not future.done() and time.time() < deadline:
+            time.sleep(0.05)
 
-        if future.result() and future.result().success:
-            self.get_logger().info(
-                f"[payload] Servo ch={channel} set to PWM={pwm}"
-            )
+        if future.done() and future.result() is not None and future.result().success:
+            self.get_logger().info(f"[payload] Servo ch={channel} set to PWM={pwm}")
             return True
 
-        self.get_logger().error(
-            f"[payload] Failed to set servo ch={channel} to PWM={pwm}"
-        )
+        self.get_logger().error(f"[payload] Failed to set servo ch={channel} to PWM={pwm}")
         return False
 
     # -----------------------------------------------------------------------
@@ -126,31 +111,30 @@ class PayloadNode(Node):
             response.message = "Payload already released"
             return response
 
-        # Open the release mechanism
-        ok = self._set_servo(self.release_channel, self.release_pwm_open)
-        if not ok:
+        if not self._set_servo(self.release_channel, self.release_pwm_open):
             response.success = False
             response.message = "Failed to activate release servo"
             return response
 
-        # Brief pause to let the mechanism fully open
-        time.sleep(self.release_pause)
+        time.sleep(self.release_pause)   # let the mechanism fully open
 
         self.is_released = True
         response.success = True
         response.message = "Payload released"
         self.get_logger().info("[payload] Payload released successfully")
-
         return response
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = PayloadNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("[payload] Shutting down")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

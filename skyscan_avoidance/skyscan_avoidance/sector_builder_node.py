@@ -54,6 +54,7 @@ class SectorBuilderNode(Node):
         # Latest computed products, published on a fixed-rate timer.
         self._latest_scan = None
         self._latest_coverage = 0.0
+        self._scan_is_new = False       # set per depth frame, cleared on publish
         self._last_depth_s = None
         self._logged_encoding_error = False
 
@@ -161,6 +162,7 @@ class SectorBuilderNode(Node):
         scan, coverage, debug = self._process(z, msg.header.stamp)
         self._latest_scan = scan
         self._latest_coverage = coverage
+        self._scan_is_new = True
         self._last_depth_s = self._now_s()
         if debug is not None and self.publish_debug_band:
             self.debug_pub.publish(debug)
@@ -178,8 +180,14 @@ class SectorBuilderNode(Node):
                     throttle_duration_sec=1.0)
             self._publish_coverage(0.0)
             return
-        if self._latest_scan is not None:
-            self._latest_scan.header.stamp = self.get_clock().now().to_msg()
+        # Publish each scan ONCE, stamped with its depth frame's time. Re-sending
+        # the last scan with a refreshed stamp would feed ArduPilot a frozen
+        # obstacle map as if it were live, and would hide a dead depth stream
+        # from the coverage guard (which measures scan arrival) until this
+        # watchdog fires. A depth stream slower than publish_rate_hz simply
+        # yields fewer scans.
+        if self._latest_scan is not None and self._scan_is_new:
+            self._scan_is_new = False
             self.scan_pub.publish(self._latest_scan)
             self._publish_coverage(self._latest_coverage)
 

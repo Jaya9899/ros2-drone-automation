@@ -1,408 +1,353 @@
-# path_planner_node.py — ROS2 node for corridor navigation and lawnmower search
+# path_planner_node.py — ROS2 node that flies the mission legs via MAVROS
 #
-# Provides Trigger services consumed by the mission_manager:
-#   /path_planner/fly_corridor     — fly through corridor waypoints via MAVROS
-#   /path_planner/run_lawnmower    — execute BCD lawnmower pattern via MAVROS
-#   /path_planner/stop_lawnmower   — cancel current lawnmower execution
+# Trigger services consumed by mission_manager (each blocks until the leg is
+# done, cancelled, or failed):
+#   /path_planner/fly_corridor_1   — clean corridor   (corridor_speed_ms)
+#   /path_planner/fly_corridor_2   — obstacle corridor (corridor_obs_speed_ms)
+#   /path_planner/run_lawnmower    — BCD lawnmower search (arena_speed_ms)
+#   /path_planner/stop             — cancel the active leg and hold position
+#   /path_planner/stop_lawnmower   — alias of stop (backwards compatible)
 #
-# Navigation strategy:
-#   Uses direct MAVROS waypoint publishing for all navigation.
-#   RL-based obstacle avoidance can be enabled via use_rl_avoidance param
-#   (placeholder — RL model integration pending).
+# Response message is a machine-readable token first:
+#   OK | CANCELLED | BUSY | NO_GPS | WP_TIMEOUT ... | SENSOR_TIMEOUT ...
+#
+# Navigation: GUIDED GlobalPositionTarget setpoints (mavros_utils.goto), nose
+# pointed along the direction of travel so the forward OAK-D sees ahead, leg
+# speed set with MAV_CMD_DO_CHANGE_SPEED. Obstacle avoidance itself is
+# ArduPilot's (BendyRuler + proximity from skyscan_avoidance).
+#
+# Obstacle-sensor gating (coverage_guard topics), per leg:
+#   sensor_live False           -> hold position; resume when live again
+#   coverage_ok False (corr. 2) -> hold; after coverage_backoff_after_s back off
+#                                  coverage_backoff_m along the corridor; resume
+#                                  when coverage recovers
+#   unhealthy > sensor_fail_timeout_s -> fail the leg with SENSOR_TIMEOUT
+#                                        (mission_node then LANDs)
 #
 # Usage:
 #   ros2 run path_planner path_planner_node
-#   ros2 run path_planner path_planner_node --ros-args \
-#       -p origin_lat:=12.9716 -p origin_lon:=77.5946
 
-import time
 import math
+import threading
+import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseStamped, TwistStamped
-from sensor_msgs.msg import NavSatFix
+from std_msgs.msg import Bool
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 
+from mission_manager import mavros_utils as mav
+from mission_manager.config_loader import load_mission_config
 from path_planner.waypoint_gen import (
+    build_transit_space,
     generate_mission_waypoints,
+    gps_to_local,
     local_to_gps,
+    plan_path,
 )
 
-from mission_manager.config_loader import load_mission_config
+_DOUBLE_ARRAY = ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY)
 
 
 class PathPlannerNode(Node):
     def __init__(self):
         super().__init__("path_planner_node")
-
-        # ----- Load config -----
         self.cfg = load_mission_config(self)
 
-        # Corridor waypoints from YAML (parallel x/y lists)
-        try:
-            self.declare_parameter(
-                "corridor_waypoints_x", [0.0, 2.5, 5.0, 7.5, 10.0])
-            self.declare_parameter(
-                "corridor_waypoints_y", [15.0, 15.0, 15.0, 15.0, 15.0])
-        except Exception:
-            pass
-        corr_x = self.get_parameter("corridor_waypoints_x").value
-        corr_y = self.get_parameter("corridor_waypoints_y").value
-        self._corridor_local = list(zip(corr_x, corr_y))
+        # ----- Course geometry (local ENU metres about origin) -----
+        # PLACEHOLDERS — set the real corridors on competition day (yaml).
+        self._corridor1_local = self._xy_param(
+            "corridor1_waypoints", [0.0, 2.5, 5.0, 7.5, 10.0], [15.0] * 5)
+        self._corridor2_local = self._xy_param(
+            "corridor2_waypoints", [10.0, 7.5, 5.0, 2.5, 0.0], [-5.0] * 5)
 
-        # Red zone vertices from YAML (parallel x/y lists)
-        try:
-            self.declare_parameter("red_zone_1_x", [24.0, 36.0, 36.0, 24.0])
-            self.declare_parameter("red_zone_1_y", [12.0, 12.0, 22.0, 22.0])
-            self.declare_parameter("red_zone_2_x", [10.0, 15.0, 12.5])
-            self.declare_parameter("red_zone_2_y", [5.0, 5.0, 10.0])
-            self.declare_parameter("red_zone_3_x", [5.0, 10.0, 10.0, 7.0, 7.0, 5.0])
-            self.declare_parameter("red_zone_3_y", [20.0, 20.0, 22.0, 22.0, 25.0, 25.0])
-        except Exception:
-            pass
+        defaults = {
+            1: ([24.0, 36.0, 36.0, 24.0], [12.0, 12.0, 22.0, 22.0]),
+            2: ([10.0, 15.0, 12.5], [5.0, 5.0, 10.0]),
+            3: ([5.0, 10.0, 10.0, 7.0, 7.0, 5.0], [20.0, 20.0, 22.0, 22.0, 25.0, 25.0]),
+        }
         self._red_zones = []
-        for i in range(1, 4):
-            try:
-                rz_x = self.get_parameter(f"red_zone_{i}_x").value
-                rz_y = self.get_parameter(f"red_zone_{i}_y").value
-                if rz_x and rz_y and len(rz_x) == len(rz_y):
-                    self._red_zones.append(list(zip(rz_x, rz_y)))
-            except Exception:
-                pass
+        for i, (dx, dy) in defaults.items():
+            zone = self._xy_param(f"red_zone_{i}", dx, dy, suffix_x="_x", suffix_y="_y")
+            if len(zone) >= 3:
+                self._red_zones.append(zone)
 
-        # ----- Callback group for concurrent service handling -----
-        self._cb_group = ReentrantCallbackGroup()
+        self.declare_parameter("arena_edge_margin_m", 1.0)
+        edge_margin = float(self.get_parameter("arena_edge_margin_m").value)
 
-        # ----- MAVROS publisher -----
-        try:
-            from mavros_msgs.msg import GlobalPositionTarget
-            self._gpt_type = GlobalPositionTarget
-            self._mavros_pub = self.create_publisher(
-                GlobalPositionTarget,
-                "/mavros/setpoint_position/global",
-                10,
-            )
-            self._has_mavros = True
-        except ImportError:
-            self._has_mavros = False
-            self._mavros_pub = None
-
-        # ----- RL obstacle avoidance (placeholder) -----
-        self._setup_rl_avoidance()
-
-        # ----- Internal state -----
-        self._lawnmower_active = False
-
-        # ----- Generate mission waypoints -----
-        self.current_gps_pos = [None, None]  # [lat, lon]
-
-        self._mission_wps = generate_mission_waypoints(
+        # ----- Lawnmower (routed around red zones) -----
+        wps = generate_mission_waypoints(
             origin_lat=self.cfg.origin_lat,
             origin_lon=self.cfg.origin_lon,
             arena_width=self.cfg.arena_width_m,
             arena_height=self.cfg.arena_height_m,
             altitude=self.cfg.cruise_altitude_m,
-            hfov_deg=self.cfg.oak_hfov_deg,
+            hfov_deg=self.cfg.down_cam_hfov_deg,
             overlap=self.cfg.strip_overlap,
             red_zones_vertices=self._red_zones,
             red_zone_buffer=self.cfg.red_zone_buffer_m,
             entry_x=self.cfg.corridor_entry_x,
             entry_y=self.cfg.corridor_entry_y,
+            speed_ms=self.cfg.arena_speed_ms,
+            edge_margin=edge_margin,
         )
+        self._lawnmower_local = wps["local_waypoints"]
         self.get_logger().info(
-            f"[path_planner] Generated {len(self._mission_wps['gps_waypoints'])} "
-            f"lawnmower waypoints, strip={self._mission_wps['strip_width']:.1f}m, "
-            f"est. dist={self._mission_wps['estimated_dist']:.0f}m, "
-            f"est. time={self._mission_wps['estimated_time']/60:.1f}min"
-        )
+            f"[path_planner] {len(self._lawnmower_local)} lawnmower waypoints, "
+            f"strip={wps['strip_width']:.1f} m, est. {wps['estimated_dist']:.0f} m / "
+            f"{wps['estimated_time'] / 60:.1f} min")
 
-        self._corridor_gps = [
-            local_to_gps(x, y, self.cfg.origin_lat, self.cfg.origin_lon)
-            for x, y in self._corridor_local
-        ]
+        # Free space for transit hops (corridor exits, drop point -> corridor 2).
+        self._transit_space = build_transit_space(
+            self._corridor1_local + self._corridor2_local + self._lawnmower_local,
+            self._red_zones, self.cfg.red_zone_buffer_m)
 
-        # ----- Services -----
-        self.create_service(
-            Trigger, "/path_planner/fly_corridor",
-            self._handle_fly_corridor,
-            callback_group=self._cb_group,
-        )
-        self.create_service(
-            Trigger, "/path_planner/run_lawnmower",
-            self._handle_run_lawnmower,
-            callback_group=self._cb_group,
-        )
-        self.create_service(
-            Trigger, "/path_planner/stop_lawnmower",
-            self._handle_stop_lawnmower,
-            callback_group=self._cb_group,
-        )
+        # ----- Live data -----
+        self._gps = None
+        self._sensor_live = False
+        self._coverage_ok = False
 
-        self.get_logger().info(
-            "[path_planner] Ready — services: fly_corridor, run_lawnmower, stop_lawnmower"
-        )
+        # ----- Run control -----
+        self._run_lock = threading.Lock()       # one leg at a time
+        self._cancel = threading.Event()
+        self._leg_deadline = 0.0
 
-        # ----- GPS subscriber (for position tracking) -----
-        self.current_gps_pos = [None, None]
         mavros_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
-        self.create_subscription(
-            NavSatFix, "/mavros/global_position/global", self._gps_cb, mavros_qos
-        )
+        self.create_subscription(NavSatFix, "/mavros/global_position/global", self._gps_cb, mavros_qos)
+        self.create_subscription(Bool, "/avoidance/sensor_live", self._live_cb, 10)
+        self.create_subscription(Bool, "/avoidance/coverage_ok", self._cov_cb, 10)
+
+        # Leg services block for the whole leg: reentrant group + multithreaded
+        # executor so /stop and the subscriptions keep running meanwhile.
+        cb = ReentrantCallbackGroup()
+        self.create_service(Trigger, "/path_planner/fly_corridor_1",
+                            self._handle_corridor_1, callback_group=cb)
+        self.create_service(Trigger, "/path_planner/fly_corridor_2",
+                            self._handle_corridor_2, callback_group=cb)
+        self.create_service(Trigger, "/path_planner/run_lawnmower",
+                            self._handle_run_lawnmower, callback_group=cb)
+        self.create_service(Trigger, "/path_planner/stop",
+                            self._handle_stop, callback_group=cb)
+        self.create_service(Trigger, "/path_planner/stop_lawnmower",
+                            self._handle_stop, callback_group=cb)
+
+        self.get_logger().info(
+            "[path_planner] Ready — fly_corridor_1, fly_corridor_2, run_lawnmower, stop")
 
     # ===================================================================
-    # RL Obstacle Avoidance — placeholder setup
+    # Params / callbacks
     # ===================================================================
 
-    def _setup_rl_avoidance(self):
-        """
-        Set up RL-based obstacle avoidance interfaces.
+    def _xy_param(self, name, default_x, default_y, suffix_x="_x", suffix_y="_y"):
+        nx, ny = name + suffix_x, name + suffix_y
+        for n, d in ((nx, default_x), (ny, default_y)):
+            if not self.has_parameter(n):
+                self.declare_parameter(n, [float(v) for v in d], _DOUBLE_ARRAY)
+        xs = list(self.get_parameter(nx).value)
+        ys = list(self.get_parameter(ny).value)
+        if len(xs) != len(ys):
+            raise ValueError(f"{nx} and {ny} must have the same length")
+        return list(zip(xs, ys))
 
-        When use_rl_avoidance is True, the path planner will:
-          1. Publish sensor data to the RL model via /rl_obstacle_avoidance/sensor_input
-          2. Subscribe to velocity overrides from the RL model
-          3. Apply velocity corrections before sending waypoints to MAVROS
+    def _gps_cb(self, msg: NavSatFix):
+        if msg.status.status >= NavSatStatus.STATUS_FIX:
+            self._gps = (msg.latitude, msg.longitude)
 
-        TODO: Integrate trained RL model. Current implementation is a
-              pass-through placeholder.
-        """
-        self._rl_avoidance_enabled = self.cfg.use_rl_avoidance
-        self._rl_velocity_override = None  # Latest override from RL model
+    def _live_cb(self, msg: Bool):
+        self._sensor_live = bool(msg.data)
 
-        if self._rl_avoidance_enabled:
-            self.get_logger().info(
-                "[path_planner] RL obstacle avoidance ENABLED "
-                f"(sensor: {self.cfg.rl_sensor_topic})"
-            )
-
-            # Subscribe to RL model velocity overrides
-            self._rl_vel_sub = self.create_subscription(
-                TwistStamped,
-                "/rl_obstacle_avoidance/velocity_override",
-                self._rl_velocity_cb,
-                10,
-                callback_group=self._cb_group,
-            )
-
-            # Publisher to forward sensor data to RL model
-            # (The RL node should subscribe directly to the sensor topic,
-            #  but this publisher can be used for pre-processed data)
-            self._rl_status_pub = self.create_publisher(
-                PoseStamped,
-                "/rl_obstacle_avoidance/current_goal",
-                10,
-            )
-        else:
-            self.get_logger().info(
-                "[path_planner] RL obstacle avoidance DISABLED "
-                "(using direct MAVROS waypoint navigation)"
-            )
-
-    def _rl_velocity_cb(self, msg: TwistStamped):
-        """Receive velocity override from RL obstacle avoidance model."""
-        self._rl_velocity_override = msg
-
-    def _apply_rl_avoidance(self, lat: float, lon: float, alt: float):
-        """
-        Apply RL-based obstacle avoidance corrections before navigating
-        to a waypoint.
-
-        TODO: Implement actual RL model inference here. The model should:
-          1. Read current depth/pointcloud data from the sensor topic
-          2. Predict whether the current path is obstructed
-          3. Output a corrected velocity vector or adjusted waypoint
-          4. Return the (possibly modified) target waypoint
-
-        Current implementation: pass-through (no modification).
-
-        Args:
-            lat: Target waypoint latitude
-            lon: Target waypoint longitude
-            alt: Target waypoint altitude
-
-        Returns:
-            Tuple of (lat, lon, alt) — possibly modified by RL model
-        """
-        if not self._rl_avoidance_enabled:
-            return lat, lon, alt
-
-        # Publish current goal for RL model awareness
-        if hasattr(self, '_rl_status_pub'):
-            goal_msg = PoseStamped()
-            goal_msg.header.frame_id = "map"
-            goal_msg.header.stamp = self.get_clock().now().to_msg()
-            goal_msg.pose.position.x = lon  # placeholder mapping
-            goal_msg.pose.position.y = lat
-            goal_msg.pose.position.z = alt
-            self._rl_status_pub.publish(goal_msg)
-
-        # TODO: Query RL model for obstacle avoidance correction
-        # If self._rl_velocity_override is set, apply it to modify
-        # the target waypoint or velocity command.
-        #
-        # Example future implementation:
-        #   if self._rl_velocity_override is not None:
-        #       override = self._rl_velocity_override
-        #       # Apply velocity correction to adjust waypoint
-        #       lat += override.twist.linear.y * dt
-        #       lon += override.twist.linear.x * dt
-        #       self._rl_velocity_override = None
-
-        return lat, lon, alt
+    def _cov_cb(self, msg: Bool):
+        self._coverage_ok = bool(msg.data)
 
     # ===================================================================
-    # GPS callback
+    # Leg execution
     # ===================================================================
 
-    def _gps_cb(self, nav_msg: NavSatFix):
-        self.current_gps_pos[0] = nav_msg.latitude
-        self.current_gps_pos[1] = nav_msg.longitude
+    def _to_gps(self, xy):
+        return local_to_gps(xy[0], xy[1], self.cfg.origin_lat, self.cfg.origin_lon)
 
-    # ===================================================================
-    # Helpers: wait for futures
-    # ===================================================================
+    def _to_local(self, latlon):
+        return gps_to_local(latlon[0], latlon[1], self.cfg.origin_lat, self.cfg.origin_lon)
 
-    def _wait_for_future(self, future, timeout_sec: float) -> bool:
-        """Wait for a future to complete without spinning the node."""
-        start_time = time.time()
-        while not future.done():
-            if time.time() - start_time > timeout_sec:
-                return False
-            time.sleep(0.05)
-        return True
+    def _health(self, leg: str):
+        """None if OK, else 'live' / 'coverage'."""
+        if not self.cfg.require_avoidance_sensor:
+            return None
+        if not self._sensor_live:
+            return "live"
+        if leg == "corridor_2" and not self._coverage_ok:
+            return "coverage"
+        return None
 
-    # ===================================================================
-    # MAVROS waypoint navigation
-    # ===================================================================
+    def _hold(self, alt):
+        if self._gps is not None:
+            mav.goto(self, self._gps[0], self._gps[1], alt, publish_count=5)
 
-    def _fly_waypoints_mavros(self, gps_waypoints: list,
-                              speed_ms: float, timeout: float) -> bool:
-        """
-        Fly through waypoints using mavros_utils.goto and wait_for_arrival.
-        If RL avoidance is enabled, each waypoint is passed through the
-        RL correction layer before being sent to MAVROS.
-        """
-        import os
-        import sys
-        from glob import glob
-        # Ensure mission_manager is in path for imports. The site-packages dir
-        # is named after the interpreter (python3.12 on Jazzy), so glob it
-        # rather than hardcoding a version.
-        for _sp in sorted(glob(os.path.join(
-                os.path.expanduser('~'), 'ros2_ws', 'install', 'mission_manager',
-                'lib', 'python3*', 'site-packages'))):
-            if _sp not in sys.path:
-                sys.path.insert(0, _sp)
-        from mission_manager.mavros_utils import goto, wait_for_arrival
+    def _goto(self, latlon, alt):
+        yaw = None
+        if self._gps is not None:
+            yaw = mav.yaw_enu_towards(self._gps[0], self._gps[1], latlon[0], latlon[1])
+        mav.goto(self, latlon[0], latlon[1], alt,
+                 publish_count=self.cfg.goto_publish_count, yaw_enu=yaw)
 
-        # At least 16s per waypoint to give SITL time to manoeuvre
-        per_wp_timeout = max(timeout / max(len(gps_waypoints), 1), 16.0)
+    def _fly_to(self, latlon, prev_latlon, alt, speed, leg):
+        """Fly one waypoint. Returns 'OK', 'CANCELLED', 'WP_TIMEOUT', 'SENSOR_TIMEOUT', 'LEG_TIMEOUT'."""
+        dist = mav.haversine(*self._gps, *latlon)
+        wp_deadline = time.time() + 10.0 + 2.5 * dist / max(speed, 0.1)
+        self._goto(latlon, alt)
 
-        for i, (lat, lon) in enumerate(gps_waypoints):
-            if not self._lawnmower_active and i > 0:
-                return False
+        bad_since = None
+        backed_off = False
+        while True:
+            if self._cancel.is_set() or not rclpy.ok():
+                return "CANCELLED"
+            now = time.time()
+            problem = self._health(leg)
+            if problem is not None:
+                if bad_since is None:
+                    bad_since = now
+                    self.get_logger().warn(
+                        f"[path_planner] {leg}: obstacle sensor {problem} not OK — holding")
+                    self._hold(alt)
+                elif (problem == "coverage" and not backed_off
+                      and now - bad_since >= self.cfg.coverage_backoff_after_s):
+                    self._back_off(latlon, prev_latlon, alt)
+                    backed_off = True
+                if now - bad_since > self.cfg.sensor_fail_timeout_s:
+                    return "SENSOR_TIMEOUT"
+                # Pausing must not eat the waypoint / leg budget.
+                wp_deadline += 0.2
+                self._leg_deadline += 0.2
+                time.sleep(0.2)
+                continue
+            if bad_since is not None:
+                self.get_logger().info(f"[path_planner] {leg}: sensor OK — resuming")
+                bad_since = None
+                backed_off = False
+                self._goto(latlon, alt)
 
-            # Apply RL obstacle avoidance correction (placeholder)
-            lat, lon, alt = self._apply_rl_avoidance(
-                lat, lon, self.cfg.cruise_altitude_m)
+            if self._gps is not None and \
+                    mav.haversine(*self._gps, *latlon) <= self.cfg.mavros_arrival_tolerance_m:
+                return "OK"
+            if now > self._leg_deadline:
+                return "LEG_TIMEOUT"
+            if now > wp_deadline:
+                return "WP_TIMEOUT"
+            time.sleep(0.2)
 
-            self.get_logger().info(
-                f"[path_planner] WP{i+1}/{len(gps_waypoints)}: "
-                f"({lat:.7f}, {lon:.7f})"
-            )
+    def _back_off(self, target, prev, alt):
+        """Retreat coverage_backoff_m back along the leg (from target toward prev)."""
+        if self._gps is None:
+            return
+        ref = prev if prev is not None else self._gps
+        d_n, d_e = mav.ne_offset(target[0], target[1], ref[0], ref[1])
+        norm = math.hypot(d_n, d_e)
+        if norm < 0.1:
+            return
+        step = self.cfg.coverage_backoff_m
+        lat, lon = mav.offset_gps(self._gps[0], self._gps[1],
+                                  d_n / norm * step, d_e / norm * step)
+        self.get_logger().warn(f"[path_planner] Low depth coverage — backing off {step:.1f} m")
+        mav.goto(self, lat, lon, alt, publish_count=10)   # keep current heading
 
-            # Send waypoint command (higher publish count for reliability)
-            goto(self, lat=lat, lon=lon,
-                 altitude_m=alt,
-                 publish_count=20)
+    def _run_leg(self, leg: str, local_wps: list, speed: float, timeout: float,
+                 skip_timed_out_wps: bool):
+        if not self._run_lock.acquire(blocking=False):
+            return False, "BUSY another leg is active"
+        try:
+            self._cancel.clear()
+            if self._gps is None:
+                return False, "NO_GPS"
+            alt = self.cfg.cruise_altitude_m
+            mav.change_speed(self, speed)
 
-            # Wait for arrival
-            arrived = wait_for_arrival(
-                self, lat=lat, lon=lon,
-                tolerance_m=self.cfg.mavros_arrival_tolerance_m,
-                timeout=per_wp_timeout,
-            )
+            # Route from where we are to the leg start around red zones.
+            start = self._to_local(self._gps)
+            approach = plan_path(start, local_wps[0], self._transit_space)[1:-1]
+            route = [self._to_gps(p) for p in approach + list(local_wps)]
 
-            if not arrived:
-                self.get_logger().warn(
-                    f"[path_planner] Timeout reaching WP{i+1}, continuing to next"
-                )
-
-        return True
+            self._leg_deadline = time.time() + timeout
+            prev = self._gps
+            for i, wp in enumerate(route):
+                self.get_logger().info(
+                    f"[path_planner] {leg} WP{i + 1}/{len(route)}: ({wp[0]:.7f}, {wp[1]:.7f})")
+                result = self._fly_to(wp, prev, alt, speed, leg)
+                if result == "OK":
+                    prev = wp
+                    continue
+                if result == "WP_TIMEOUT" and skip_timed_out_wps:
+                    self.get_logger().warn(f"[path_planner] {leg}: WP{i + 1} timeout, skipping")
+                    prev = wp
+                    continue
+                return False, f"{result} {leg} at WP{i + 1}/{len(route)}"
+            return True, f"OK {leg} complete"
+        finally:
+            self._run_lock.release()
 
     # ===================================================================
     # Service handlers
     # ===================================================================
 
-    def _handle_fly_corridor(self, request, response):
-        """Fly through corridor waypoints. Blocks until navigation completes."""
-        self.get_logger().info("[path_planner] FLY_CORRIDOR requested")
-        corridor_wps = list(self._corridor_gps)
-
-        if not rclpy.ok():
-            response.success = False
-            response.message = "Node shutting down"
-            return response
-
-        ok = self._fly_waypoints_mavros(
-            corridor_wps, self.cfg.corridor_speed_ms,
-            self.cfg.corridor_timeout_s)
-
-        self.get_logger().info(f"[path_planner] FLY_CORRIDOR finished (ok={ok})")
-        response.success = ok
-        response.message = f"Corridor transit {'completed' if ok else 'failed'}"
+    def _respond(self, response, ok_msg):
+        ok, msg = ok_msg
+        response.success, response.message = ok, msg
+        # Separate call sites: rclpy rejects one call site logging at two
+        # different severities.
+        if ok:
+            self.get_logger().info(f"[path_planner] -> {msg}")
+        else:
+            self.get_logger().warn(f"[path_planner] -> {msg}")
         return response
+
+    def _handle_corridor_1(self, request, response):
+        # A corridor waypoint that cannot be reached means the vehicle is
+        # stuck between walls — fail the leg rather than cut a corner.
+        return self._respond(response, self._run_leg(
+            "corridor_1", self._corridor1_local, self.cfg.corridor_speed_ms,
+            self.cfg.corridor_timeout_s, skip_timed_out_wps=False))
+
+    def _handle_corridor_2(self, request, response):
+        return self._respond(response, self._run_leg(
+            "corridor_2", self._corridor2_local, self.cfg.corridor_obs_speed_ms,
+            self.cfg.corridor_timeout_s, skip_timed_out_wps=False))
 
     def _handle_run_lawnmower(self, request, response):
-        """Execute BCD lawnmower search pattern. Blocks until complete or stopped."""
-        self.get_logger().info("[path_planner] RUN_LAWNMOWER requested")
-        self._lawnmower_active = True
-        gps_wps = self._mission_wps['gps_waypoints']
+        return self._respond(response, self._run_leg(
+            "lawnmower", self._lawnmower_local, self.cfg.arena_speed_ms,
+            self.cfg.lawnmower_timeout_s, skip_timed_out_wps=True))
 
-        if not rclpy.ok():
-            self._lawnmower_active = False
-            response.success = False
-            response.message = "Node shutting down"
-            return response
-
-        ok = self._fly_waypoints_mavros(
-            gps_wps, self.cfg.arena_speed_ms,
-            self.cfg.lawnmower_timeout_s)
-
-        self._lawnmower_active = False
-        self.get_logger().info(f"[path_planner] RUN_LAWNMOWER finished (ok={ok})")
-        response.success = ok
-        response.message = f"Lawnmower {'completed' if ok else 'stopped/failed'}"
-        return response
-
-    def _handle_stop_lawnmower(self, request, response):
-        """Cancel current lawnmower execution."""
-        self.get_logger().info("[path_planner] STOP_LAWNMOWER requested")
-        self._lawnmower_active = False
+    def _handle_stop(self, request, response):
+        self._cancel.set()
+        # Hold here before replying so the active leg's last target is
+        # replaced; the caller's next goto then overrides this hold.
+        self._hold(self.cfg.cruise_altitude_m)
         response.success = True
-        response.message = "Lawnmower stopped"
+        response.message = "OK stopped, holding position"
+        self.get_logger().info("[path_planner] STOP — holding position")
         return response
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = PathPlannerNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        # Use MultiThreadedExecutor for concurrent service handling
-        from rclpy.executors import MultiThreadedExecutor
-        executor = MultiThreadedExecutor()
-        executor.add_node(node)
         executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("[path_planner] Shutting down")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

@@ -307,28 +307,35 @@ def project_to_ned(
     cy: float,
     fx: float,
     fy: float,
+    heading_deg: float,
+    cam_yaw_offset_deg: float = 0.0,
 ) -> tuple[float, float]:
     """
-    Project a pixel coordinate to a NED ground-plane offset using the
-    pinhole camera model.
+    Project a pixel of a straight-down camera to a NED ground offset from the
+    point directly below the drone (pinhole model, level attitude assumed).
 
-    dx = (u - cx) * Z / fx
-    dy = (v - cy) * Z / fy
+    Camera mounting convention: image TOP points toward the drone's nose
+    (rotate with cam_yaw_offset_deg, clockwise, if it is mounted otherwise).
+    Then image u (right) = body right and image v (down) = body backward:
 
-    Args:
-        pixel_u:    Pixel x-coordinate of target centroid.
-        pixel_v:    Pixel y-coordinate of target centroid.
-        altitude_m: Known hover altitude in metres (Z).
-        cx, cy:     Principal point from camera calibration.
-        fx, fy:     Focal lengths in pixels from camera calibration.
+        forward = -(v - cy) * Z / fy
+        right   =  (u - cx) * Z / fx
+
+    and the body offset is rotated by the compass heading (deg, clockwise
+    from North, MAVROS /global_position/compass_hdg) into North/East:
+
+        north = forward * cos(psi) - right * sin(psi)
+        east  = forward * sin(psi) + right * cos(psi)
 
     Returns:
-        (delta_north, delta_east) NED offset in metres.
-        Add to current LOCAL_POSITION_NED to get absolute target waypoint.
+        (delta_north, delta_east) in metres.
     """
-    delta_x = (pixel_u - cx) * altitude_m / fx   # North offset
-    delta_y = (pixel_v - cy) * altitude_m / fy   # East offset
-    return float(delta_x), float(delta_y)
+    forward = -(pixel_v - cy) * altitude_m / fy
+    right = (pixel_u - cx) * altitude_m / fx
+    psi = np.radians(heading_deg + cam_yaw_offset_deg)
+    north = forward * np.cos(psi) - right * np.sin(psi)
+    east = forward * np.sin(psi) + right * np.cos(psi)
+    return float(north), float(east)
 
 
 def quad_centroid(pts: np.ndarray) -> tuple[float, float]:

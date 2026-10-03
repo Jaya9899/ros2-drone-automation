@@ -1,29 +1,30 @@
 # mavros_utils.py — Synchronous wrappers for common MAVROS operations
 #
 # Usage:
-#   from mission_manager.mavros_utils import arm, set_mode, takeoff, wait_for_altitude
+#   from mission_manager.mavros_utils import arm, set_mode, takeoff, goto
 #   set_mode(node, "GUIDED")
 #   arm(node)
 #   takeoff(node, altitude_m=5.0)
-#   wait_for_altitude(node, target_alt=5.0)
 #
 # All functions accept a ROS2 node handle as the first argument so they can
-# create service clients and subscriptions without owning their own node.
+# create service clients and publishers without owning their own node.
 #
-# All timeout / tolerance values are passed as keyword arguments — no
-# module-level constants.
+# THREADING CONTRACT: every blocking helper here waits by sleep-polling a
+# future. They must be called from a worker thread while another thread spins
+# the node — never from inside a ROS callback, and never with spin_once /
+# spin_until_future_complete (nested spinning of an executor that is already
+# spinning raises or deadlocks).
 
-import rclpy
+import math
+import time
+
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
-from mavros_msgs.msg import State
-from sensor_msgs.msg import NavSatFix
-from geometry_msgs.msg import PoseStamped
+from mavros_msgs.srv import CommandBool, CommandLong, CommandTOL, MessageInterval, SetMode
 
 # QoS profile for high-frequency telemetry / sensors
-# MAVROS often publishes these as BEST_EFFORT
+# MAVROS publishes these as BEST_EFFORT
 sensor_qos = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
@@ -31,38 +32,52 @@ sensor_qos = QoSProfile(
     depth=10
 )
 
+MAV_CMD_DO_CHANGE_SPEED = 178
 
-def _call_service(node: Node, srv_type, srv_name: str, request,
-                  timeout: float = 10.0):
-    """Create a client, wait for the service, call it synchronously, return result.
+# Messages the mission depends on. With SITL --no-mavproxy nothing else
+# requests ArduPilot's streams, and on hardware the SRx_ defaults may be 0.
+#   1   SYS_STATUS          -> /mavros/battery
+#   24  GPS_RAW_INT         -> fix type: NavSatFix.status on /global_position/global
+#                              stays -1 (no fix) without it
+#   30  ATTITUDE            -> /mavros/imu/data (orientation, sector_builder pitch)
+#   32  LOCAL_POSITION_NED  -> /mavros/local_position/pose
+#   33  GLOBAL_POSITION_INT -> /mavros/global_position/{global,rel_alt,compass_hdg}
+#   65  RC_CHANNELS         -> /mavros/rc/in
+#   147 BATTERY_STATUS      -> /mavros/battery
+MISSION_STREAMS = (1, 24, 30, 32, 33, 65, 147)
 
-    Uses poll-based wait instead of spin_until_future_complete so it is
-    safe to call from a background thread while the main thread spins.
-    """
-    import time
 
-    client = node.create_client(srv_type, srv_name)
-
-    if not client.wait_for_service(timeout_sec=timeout):
-        node.get_logger().error(f"Service {srv_name} not available after {timeout}s")
-        return None
-
-    future = client.call_async(request)
-
-    # Poll-based wait — safe when main thread already spins the node
+def _wait_future(future, timeout: float) -> bool:
     deadline = time.time() + timeout
     while not future.done() and time.time() < deadline:
         time.sleep(0.05)
+    return future.done()
 
-    if future.result() is None:
-        node.get_logger().error(f"Service call to {srv_name} failed (no result)")
-        return None
 
-    return future.result()
+def _call_service(node: Node, srv_type, srv_name: str, request,
+                  timeout: float = 10.0):
+    """Create a client, wait for the service, call it, return the result.
+
+    Sleep-polls the future (see THREADING CONTRACT above). The client is
+    destroyed afterwards so repeated calls do not leak clients.
+    """
+    client = node.create_client(srv_type, srv_name)
+    try:
+        if not client.wait_for_service(timeout_sec=timeout):
+            node.get_logger().error(f"Service {srv_name} not available after {timeout}s")
+            return None
+
+        future = client.call_async(request)
+        if not _wait_future(future, timeout) or future.result() is None:
+            node.get_logger().error(f"Service call to {srv_name} failed (no result)")
+            return None
+        return future.result()
+    finally:
+        node.destroy_client(client)
 
 
 # ---------------------------------------------------------------------------
-# set_mode  — e.g. "GUIDED", "STABILIZE", "LAND"
+# set_mode  — e.g. "GUIDED", "LOITER", "LAND"
 # ---------------------------------------------------------------------------
 def set_mode(node: Node, mode: str, timeout: float = 10.0) -> bool:
     """Switch the FCU flight mode via /mavros/set_mode."""
@@ -83,96 +98,26 @@ def set_mode(node: Node, mode: str, timeout: float = 10.0) -> bool:
 # arm / disarm
 # ---------------------------------------------------------------------------
 def arm(node: Node, timeout: float = 10.0) -> bool:
-    """Arm the vehicle via /mavros/cmd/arming."""
+    """Send one arm request via /mavros/cmd/arming (no retry, no confirm)."""
     req = CommandBool.Request()
     req.value = True
 
     result = _call_service(node, CommandBool, "/mavros/cmd/arming", req, timeout=timeout)
 
     if result and result.success:
-        node.get_logger().info("[mavros_utils] Vehicle armed")
+        node.get_logger().info("[mavros_utils] Arm command accepted")
         return True
 
-    node.get_logger().error("[mavros_utils] Arming failed")
+    node.get_logger().warn("[mavros_utils] Arm command rejected")
     return False
 
 
-# ---------------------------------------------------------------------------
-# takeoff
-# ---------------------------------------------------------------------------
-def takeoff(node: Node, altitude_m: float, timeout: float = 10.0) -> bool:
-    """Command takeoff to *altitude_m* via /mavros/cmd/takeoff."""
-    req = CommandTOL.Request()
-    req.altitude = float(altitude_m)
-    req.latitude = 0.0   # 0 = use current position
-    req.longitude = 0.0
-    req.min_pitch = 0.0
-    req.yaw = 0.0
-
-    result = _call_service(node, CommandTOL, "/mavros/cmd/takeoff", req, timeout=timeout)
-
-    if result and result.success:
-        node.get_logger().info(f"[mavros_utils] Takeoff command accepted ({altitude_m} m)")
-        return True
-
-    node.get_logger().error("[mavros_utils] Takeoff command rejected")
-    return False
-
-
-# ---------------------------------------------------------------------------
-# wait_for_altitude — blocks until drone reaches target altitude
-# ---------------------------------------------------------------------------
-def wait_for_altitude(
-    node: Node,
-    target_alt: float,
-    tolerance: float = 0.5,
-    timeout: float = 30.0,
-) -> bool:
-    """Subscribe to local position and spin until altitude is within tolerance."""
-    import time
-
-    reached = False
-    current_alt = 0.0
-
-    def _pose_cb(msg: PoseStamped):
-        nonlocal current_alt, reached
-        current_alt = msg.pose.position.z
-        if abs(current_alt - target_alt) <= tolerance:
-            reached = True
-
-    sub = node.create_subscription(
-        PoseStamped,
-        "/mavros/local_position/pose",
-        _pose_cb,
-        sensor_qos,
-    )
-
-    deadline = time.time() + timeout
-    while not reached and time.time() < deadline:
-        time.sleep(0.25)
-
-    # cleanup
-    node.destroy_subscription(sub)
-
-    if reached:
-        node.get_logger().info(
-            f"[mavros_utils] Altitude reached: {current_alt:.1f} m "
-            f"(target {target_alt:.1f} m)"
-        )
-    else:
-        node.get_logger().warn(
-            f"[mavros_utils] Altitude timeout: {current_alt:.1f} m "
-            f"after {timeout}s (target {target_alt:.1f} m)"
-        )
-
-    return reached
-
-
-# ---------------------------------------------------------------------------
-# disarm
-# ---------------------------------------------------------------------------
 def disarm(node: Node, timeout: float = 10.0) -> bool:
-    """Disarm the vehicle via /mavros/cmd/arming."""
+    """Disarm the vehicle via /mavros/cmd/arming.
+
+    ArduPilot refuses a normal disarm while flying; only call this on the
+    ground. In the air use LAND and let ArduPilot auto-disarm on touchdown.
+    """
     req = CommandBool.Request()
     req.value = False
 
@@ -187,28 +132,118 @@ def disarm(node: Node, timeout: float = 10.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# land — switch to LAND mode and wait for touchdown
+# takeoff / land
 # ---------------------------------------------------------------------------
-def land(node: Node, timeout: float = 10.0) -> bool:
-    """Command landing by switching to LAND mode via /mavros/cmd/land."""
+def takeoff(node: Node, altitude_m: float, timeout: float = 10.0) -> bool:
+    """Command takeoff to *altitude_m* via /mavros/cmd/takeoff (GUIDED, armed)."""
     req = CommandTOL.Request()
-    req.altitude = 0.0
-    req.latitude = 0.0   # 0 = use current position
+    req.altitude = float(altitude_m)
+    req.latitude = 0.0   # ignored by ArduCopter: takes off in place
     req.longitude = 0.0
     req.min_pitch = 0.0
     req.yaw = 0.0
 
-    result = _call_service(node, CommandTOL, "/mavros/cmd/land", req, timeout=timeout)
+    result = _call_service(node, CommandTOL, "/mavros/cmd/takeoff", req, timeout=timeout)
 
     if result and result.success:
-        node.get_logger().info("[mavros_utils] Land command accepted")
+        node.get_logger().info(f"[mavros_utils] Takeoff command accepted ({altitude_m} m)")
         return True
 
-    # Fallback: try switching flight mode to LAND
-    node.get_logger().warn(
-        "[mavros_utils] /mavros/cmd/land failed, falling back to set_mode LAND"
-    )
+    node.get_logger().error("[mavros_utils] Takeoff command rejected")
+    return False
+
+
+def land(node: Node, timeout: float = 10.0) -> bool:
+    """Switch to LAND mode (lands in place, auto-disarms on touchdown)."""
     return set_mode(node, "LAND", timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# change_speed — MAV_CMD_DO_CHANGE_SPEED, honoured by GUIDED position targets
+# ---------------------------------------------------------------------------
+def change_speed(node: Node, speed_ms: float, timeout: float = 5.0) -> bool:
+    """Set the horizontal navigation speed used for GUIDED position targets."""
+    req = CommandLong.Request()
+    req.broadcast = False
+    req.command = MAV_CMD_DO_CHANGE_SPEED
+    req.param1 = 1.0               # 1 = ground speed
+    req.param2 = float(speed_ms)
+    req.param3 = -1.0              # throttle: no change
+
+    result = _call_service(node, CommandLong, "/mavros/cmd/command", req, timeout=timeout)
+    if result and result.success:
+        node.get_logger().info(f"[mavros_utils] Speed set to {speed_ms:.1f} m/s")
+        return True
+    node.get_logger().warn(f"[mavros_utils] DO_CHANGE_SPEED {speed_ms} m/s not accepted")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# request_message_intervals — make ArduPilot stream what we subscribe to
+# ---------------------------------------------------------------------------
+def request_message_intervals(node: Node, message_ids=MISSION_STREAMS,
+                              rate_hz: float = 10.0, timeout: float = 10.0) -> bool:
+    """MAV_CMD_SET_MESSAGE_INTERVAL for each id via /mavros/set_message_interval."""
+    client = node.create_client(MessageInterval, "/mavros/set_message_interval")
+    try:
+        if not client.wait_for_service(timeout_sec=timeout):
+            node.get_logger().error("[mavros_utils] set_message_interval unavailable")
+            return False
+        ok = True
+        for mid in message_ids:
+            req = MessageInterval.Request()
+            req.message_id = int(mid)
+            req.message_rate = float(rate_hz)
+            future = client.call_async(req)
+            if _wait_future(future, 5.0) and future.result() and future.result().success:
+                node.get_logger().info(f"[mavros_utils] streaming msg {mid} @ {rate_hz:.0f} Hz")
+            else:
+                node.get_logger().warn(f"[mavros_utils] set_message_interval({mid}) not confirmed")
+                ok = False
+        return ok
+    finally:
+        node.destroy_client(client)
+
+
+# ---------------------------------------------------------------------------
+# Geodesy helpers (flat-earth, fine over a few hundred metres)
+# ---------------------------------------------------------------------------
+_M_PER_DEG_LAT = 111_320.0
+
+
+def haversine(lat1, lon1, lat2, lon2) -> float:
+    """Great-circle distance in metres between two GPS points."""
+    R = 6_371_000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + \
+        math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def offset_gps(lat: float, lon: float, d_north: float, d_east: float) -> tuple:
+    """Shift a GPS point by (d_north, d_east) metres."""
+    return (lat + d_north / _M_PER_DEG_LAT,
+            lon + d_east / (_M_PER_DEG_LAT * math.cos(math.radians(lat))))
+
+
+def ne_offset(lat1, lon1, lat2, lon2) -> tuple:
+    """(d_north, d_east) metres from point 1 to point 2."""
+    d_north = (lat2 - lat1) * _M_PER_DEG_LAT
+    d_east = (lon2 - lon1) * _M_PER_DEG_LAT * math.cos(math.radians(lat1))
+    return d_north, d_east
+
+
+def yaw_enu_towards(lat1, lon1, lat2, lon2):
+    """ENU yaw (rad, 0 = East, CCW+) pointing from point 1 to point 2.
+
+    Returns None when the points are too close for a meaningful heading.
+    """
+    d_north, d_east = ne_offset(lat1, lon1, lat2, lon2)
+    if math.hypot(d_north, d_east) < 0.5:
+        return None
+    return math.atan2(d_north, d_east)
 
 
 # ---------------------------------------------------------------------------
@@ -220,32 +255,23 @@ def goto(
     lon: float,
     altitude_m: float,
     publish_count: int = 20,
+    yaw_enu: float | None = None,
 ) -> bool:
     """
-    Publish a setpoint to /mavros/setpoint_raw/global to navigate
-    the vehicle to (lat, lon, altitude_m).
+    Stream a GlobalPositionTarget to /mavros/setpoint_raw/global so GUIDED
+    flies to (lat, lon) at altitude_m above home.
 
-    Uses mavros_msgs/GlobalPositionTarget via the SET_POSITION_TARGET_GLOBAL_INT
-    interface.  Requires GUIDED mode.
+    yaw_enu: heading to hold, ENU radians (0 = East, CCW+; MAVROS converts to
+    NED). Pass the direction of travel so the forward OAK-D looks where the
+    vehicle is going. None sets IGNORE_YAW and leaves the heading alone — never
+    leave yaw unmasked with 0.0, that silently forces the nose to face East.
 
-    Fixes the "waypoint timeout" bug on two counts:
-
-    1. **Correct topic.** GlobalPositionTarget belongs on
-       ``/mavros/setpoint_raw/global`` (the setpoint_raw plugin). It was
-       previously published to ``/mavros/setpoint_position/global``, which
-       expects a geographic_msgs/GeoPoseStamped — a message-type mismatch, so
-       MAVROS never received the setpoint and the vehicle never moved.
-    2. **Persistent publisher + real stream.** The publisher is created once and
-       cached on the node (``node._goto_pub``); we stream ~2 s (20 samples at
-       10 Hz) instead of firing a 0.5 s burst on an ephemeral publisher that was
-       torn down before DDS discovery completed.
+    The publisher is created once and cached on the node (``node._goto_pub``)
+    so DDS discovery is not repeated per call; the target is streamed for
+    publish_count * 0.1 s so ArduPilot reliably latches it.
     """
     from mavros_msgs.msg import GlobalPositionTarget
-    from std_msgs.msg import Header
 
-    import time as _time
-
-    # Persistent, cached publisher — do NOT recreate/destroy per call.
     pub = getattr(node, "_goto_pub", None)
     if pub is None:
         pub = node.create_publisher(
@@ -256,7 +282,6 @@ def goto(
         node._goto_pub = pub
 
     msg = GlobalPositionTarget()
-    msg.header = Header()
     msg.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
     msg.type_mask = (
         GlobalPositionTarget.IGNORE_VX |
@@ -267,158 +292,22 @@ def goto(
         GlobalPositionTarget.IGNORE_AFZ |
         GlobalPositionTarget.IGNORE_YAW_RATE
     )
-    msg.latitude = lat
-    msg.longitude = lon
-    msg.altitude = altitude_m
+    if yaw_enu is None:
+        msg.type_mask |= GlobalPositionTarget.IGNORE_YAW
+    else:
+        msg.yaw = float(yaw_enu)
+    msg.latitude = float(lat)
+    msg.longitude = float(lon)
+    msg.altitude = float(altitude_m)
 
-    # Stream the target so ArduPilot GUIDED latches it.
-    # time.sleep (not spin_once) — safe from a background thread while the
-    # main thread spins the node.
-    for _ in range(publish_count):
+    for _ in range(max(1, int(publish_count))):
         msg.header.stamp = node.get_clock().now().to_msg()
         pub.publish(msg)
-        _time.sleep(0.1)
+        time.sleep(0.1)
 
     node.get_logger().info(
-        f"[mavros_utils] Goto command sent: lat={lat:.7f}, lon={lon:.7f}, "
+        f"[mavros_utils] Goto sent: lat={lat:.7f}, lon={lon:.7f}, "
         f"alt={altitude_m:.1f} m"
+        + ("" if yaw_enu is None else f", yaw_enu={math.degrees(yaw_enu):.0f} deg")
     )
-
-    # Publisher is intentionally kept alive (cached on the node) so the next
-    # goto reuses it without re-running DDS discovery.
     return True
-
-
-# ---------------------------------------------------------------------------
-# wait_for_arrival — block until drone is within tolerance of target lat/lon
-# ---------------------------------------------------------------------------
-def wait_for_arrival(
-    node: Node,
-    lat: float,
-    lon: float,
-    tolerance_m: float = 1.5,
-    timeout: float = 60.0,
-) -> bool:
-    """
-    Subscribe to /mavros/global_position/global and spin until the vehicle
-    is within *tolerance_m* metres of the target (lat, lon).
-    """
-    import time
-    import math
-    from sensor_msgs.msg import NavSatFix
-
-    arrived = False
-
-    def _haversine(lat1, lon1, lat2, lon2):
-        """Return distance in metres between two GPS points."""
-        R = 6_371_000.0
-        phi1, phi2 = math.radians(lat1), math.radians(lat2)
-        dphi = math.radians(lat2 - lat1)
-        dlam = math.radians(lon2 - lon1)
-        a = math.sin(dphi / 2) ** 2 + \
-            math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    def _gps_cb(msg: NavSatFix):
-        nonlocal arrived
-        dist = _haversine(msg.latitude, msg.longitude, lat, lon)
-        if dist <= tolerance_m:
-            arrived = True
-
-    sub = node.create_subscription(
-        NavSatFix,
-        "/mavros/global_position/global",
-        _gps_cb,
-        sensor_qos,
-    )
-
-    deadline = time.time() + timeout
-    while not arrived and time.time() < deadline:
-        time.sleep(0.25)
-
-    node.destroy_subscription(sub)
-
-    if arrived:
-        node.get_logger().info(
-            f"[mavros_utils] Arrived at ({lat:.7f}, {lon:.7f})"
-        )
-    else:
-        node.get_logger().warn(
-            f"[mavros_utils] Arrival timeout after {timeout}s "
-            f"(target: {lat:.7f}, {lon:.7f})"
-        )
-
-    return arrived
-def wait_for_ready(node: Node, timeout: float = 30.0) -> bool:
-    """
-    Wait until MAVROS is connected and EKF is healthy enough to arm.
-    Checks /mavros/state for connected=True and system_status=3 (standby).
-    """
-    import time
-    from mavros_msgs.msg import State
-
-    ready = False
-
-    def _state_cb(msg: State):
-        nonlocal ready
-        # system_status 3 = MAV_STATE_STANDBY (ready to arm)
-        if msg.connected and msg.system_status == 3:
-            ready = True
-
-    sub = node.create_subscription(State, "/mavros/state", _state_cb, sensor_qos)
-
-    deadline = time.time() + timeout
-    while not ready and time.time() < deadline:
-        rclpy.spin_once(node, timeout_sec=0.25)
-
-    node.destroy_subscription(sub)
-
-    if ready:
-        node.get_logger().info("[mavros_utils] FCU ready for arming")
-    else:
-        node.get_logger().error(f"[mavros_utils] FCU not ready after {timeout}s")
-
-    return ready
-
-# ---------------------------------------------------------------------------
-# get_current_gps — read one GPS fix and return (lat, lon)
-# ---------------------------------------------------------------------------
-def get_current_gps(
-    node: Node,
-    timeout: float = 10.0,
-) -> tuple | None:
-    """
-    Read a single message from /mavros/global_position/global and return
-    (latitude, longitude) as a tuple, or None on timeout.
-    """
-    import time
-    from sensor_msgs.msg import NavSatFix
-
-    fix = None
-
-    def _cb(msg: NavSatFix):
-        nonlocal fix
-        if msg.status.status >= 0:   # STATUS_FIX or better
-            fix = (msg.latitude, msg.longitude)
-
-    sub = node.create_subscription(
-        NavSatFix,
-        "/mavros/global_position/global",
-        _cb,
-        sensor_qos,
-    )
-
-    deadline = time.time() + timeout
-    while fix is None and time.time() < deadline:
-        time.sleep(0.25)
-
-    node.destroy_subscription(sub)
-
-    if fix:
-        node.get_logger().info(
-            f"[mavros_utils] Current GPS: lat={fix[0]:.7f}, lon={fix[1]:.7f}"
-        )
-    else:
-        node.get_logger().warn("[mavros_utils] Could not get GPS fix")
-
-    return fix

@@ -37,6 +37,19 @@ def generate_launch_description():
     mission_params = os.path.join(
         mission_mgr_share, "config", "mission_params.yaml")
 
+    # SITL has no RC pilot, no downward camera and no OAK-D, so the
+    # hardware safety gates are relaxed here (and ONLY here).
+    sitl_mission_overrides = {
+        "require_rc_switch": False,         # no pilot switch in SITL
+        "allow_qr_fallback": True,          # no camera: fly with qr_fallback_id
+        "qr_scan_attempts": 1,
+        "qr_scan_timeout_s": 5.0,
+        "require_avoidance_sensor": False,  # no OAK-D / coverage_guard
+        # SITL simulates a 3S pack (12.6 V); the 4S thresholds would abort.
+        "battery_critical_v": 10.5,
+        "battery_warning_v": 11.1,
+    }
+
     # ----- Launch arguments -----
     use_sim_arg = DeclareLaunchArgument(
         "use_sim", default_value="true",
@@ -77,7 +90,8 @@ def generate_launch_description():
         executable="safety_monitor",
         name="safety_monitor",
         output="screen",
-        parameters=[mission_params],
+        parameters=[mission_params, {"battery_critical_v": 10.5,
+                                     "battery_warning_v": 11.1}],
     )
 
     # ================================================================
@@ -88,7 +102,7 @@ def generate_launch_description():
         executable="path_planner_node",
         name="path_planner_node",
         output="screen",
-        parameters=[mission_params],
+        parameters=[mission_params, {"require_avoidance_sensor": False}],
     )
 
     # ================================================================
@@ -134,7 +148,7 @@ def generate_launch_description():
         executable="qr_scanner_node",
         name="qr_scanner_node",
         output="screen",
-        parameters=[mission_params],
+        parameters=[mission_params, {"scan_timeout_s": 5.0}],
     )
 
     # ================================================================
@@ -145,7 +159,7 @@ def generate_launch_description():
         executable="mission_node",
         name="mission_node",
         output="screen",
-        parameters=[mission_params],
+        parameters=[mission_params, sitl_mission_overrides],
     )
 
     # ================================================================

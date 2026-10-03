@@ -12,9 +12,16 @@ qr_scanner_node:
     # When any detection exceeds this, /qr_scanner/stop_move = True is published
     stop_confidence: 0.7
 
-    # Nominal delivery zone hover altitude in metres
-    # Used for NED projection when /vehicle_state altitude is unavailable
-    delivery_altitude: 10.0
+    # Fallback altitude (m above home) for the ground projection, used only
+    # when /mavros/global_position/rel_alt is unavailable. = cruise altitude.
+    delivery_altitude: 5.0
+
+    # Phase 2 reference-scan timeout (mission_node waits longer than this)
+    scan_timeout_s: 60.0
+
+    # Downward camera mounting: image TOP should point at the drone's nose.
+    # If it is rotated, set the rotation here (degrees, clockwise).
+    cam_yaw_offset_deg: 0.0
 
     # ── Camera intrinsics ────────────────────────────────────────────────────
     # These are approximate values for RPi Camera Module 3 at 1280x720.

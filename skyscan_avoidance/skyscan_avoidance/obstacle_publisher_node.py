@@ -21,7 +21,6 @@
 # LaserScan is CCW/left-positive, OBSTACLE_DISTANCE is CW/right-indexed. Gate 1B
 # verifies the result empirically.
 
-import math
 
 import numpy as np
 import rclpy

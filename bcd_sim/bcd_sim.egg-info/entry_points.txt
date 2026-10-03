@@ -1,3 +1,0 @@
-[console_scripts]
-bcd_planner = bcd_sim.bcd_planner:main
-mission_executor = bcd_sim.mission_executor:main

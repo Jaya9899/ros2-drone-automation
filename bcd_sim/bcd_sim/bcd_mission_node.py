@@ -109,7 +109,9 @@ class BCDMissionNode(Node):
         try:
             from mavros_msgs.msg import GlobalPositionTarget
             self.gpt_cls = GlobalPositionTarget
-            self.goto_pub = self.create_publisher(GlobalPositionTarget, "/mavros/setpoint_position/global", 10)
+            # GlobalPositionTarget belongs on setpoint_raw/global; setpoint_position/global
+            # expects GeoPoseStamped and MAVROS would never receive these.
+            self.goto_pub = self.create_publisher(GlobalPositionTarget, "/mavros/setpoint_raw/global", 10)
         except ImportError:
             self.gpt_cls = None; self.goto_pub = None
 

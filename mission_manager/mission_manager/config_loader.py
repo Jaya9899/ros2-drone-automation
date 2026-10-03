@@ -23,11 +23,8 @@ class MissionConfig:
 
 def _declare(node, name: str, default):
     """Declare a ROS2 parameter (skip if already declared) and return its value."""
-    try:
+    if not node.has_parameter(name):
         node.declare_parameter(name, default)
-    except Exception:
-        # Parameter already declared — just read it
-        pass
     return node.get_parameter(name).value
 
 
@@ -42,37 +39,32 @@ def load_mission_config(node) -> MissionConfig:
     cfg = MissionConfig()
 
     # ── Arena & Course Geometry ──────────────────────────────────
-    cfg.corridor_length_m     = _declare(node, "corridor_length_m", 10.0)
-    cfg.corridor_width_m      = _declare(node, "corridor_width_m", 3.5)
-    cfg.corridor_height_m     = _declare(node, "corridor_height_m", 3.048)
     cfg.arena_width_m         = _declare(node, "arena_width_m", 40.0)
     cfg.arena_height_m        = _declare(node, "arena_height_m", 30.0)
 
-    # ── Altitudes ────────────────────────────────────────────────
+    # ── Altitudes (metres above home) ────────────────────────────
     cfg.drop_altitude_m       = _declare(node, "drop_altitude_m", 5.0)
     cfg.cruise_altitude_m     = _declare(node, "cruise_altitude_m", 5.0)
 
-    # ── Speeds ───────────────────────────────────────────────────
+    # ── Speeds (sent to ArduPilot with DO_CHANGE_SPEED per leg) ──
     cfg.corridor_speed_ms     = _declare(node, "corridor_speed_ms", 2.0)
     cfg.corridor_obs_speed_ms = _declare(node, "corridor_obs_speed_ms", 1.0)
-    cfg.arena_speed_ms        = _declare(node, "arena_speed_ms", 3.0)
+    cfg.arena_speed_ms        = _declare(node, "arena_speed_ms", 1.5)
 
-    # ── GPS Origin ───────────────────────────────────────────────
+    # ── GPS Origin of the local arena frame ──────────────────────
     cfg.origin_lat            = _declare(node, "origin_lat", 12.9716)
     cfg.origin_lon            = _declare(node, "origin_lon", 77.5946)
 
-    # ── Camera / OAK-D ──────────────────────────────────────────
-    cfg.oak_hfov_deg          = _declare(node, "oak_hfov_deg", 62.2)
-    cfg.oak_warning_dist_m    = _declare(node, "oak_warning_dist_m", 1.5)
-    cfg.strip_overlap         = _declare(node, "strip_overlap", 0.80)
+    # ── Downward camera (RPi Camera Module 3) ────────────────────
+    # 66 deg = standard Camera Module 3; use 102 for the Wide variant.
+    cfg.down_cam_hfov_deg     = _declare(node, "down_cam_hfov_deg", 66.0)
+    # Fraction of the camera footprint shared by adjacent strips.
+    cfg.strip_overlap         = _declare(node, "strip_overlap", 0.20)
 
-    # ── Battery ──────────────────────────────────────────────────
-    cfg.battery_critical_v    = _declare(node, "battery_critical_v", 10.0)
+    # ── Battery (4S, under load). ArduPilot BATT_FS_* is the primary
+    #    failsafe; the companion only stops commanding the mission. ──
+    cfg.battery_critical_v    = _declare(node, "battery_critical_v", 13.6)
     cfg.battery_warning_v     = _declare(node, "battery_warning_v", 14.0)
-    cfg.battery_capacity_mah  = _declare(node, "battery_capacity_mah", 5200.0)
-    cfg.battery_cells         = _declare(node, "battery_cells", 4)
-    cfg.nominal_voltage_v     = _declare(node, "nominal_voltage_v", 14.8)
-    cfg.auw_grams             = _declare(node, "auw_grams", 1950.0)
 
     # ── Timeouts & Tolerances ────────────────────────────────────
     cfg.service_timeout_s     = _declare(node, "service_timeout_s", 10.0)
@@ -80,18 +72,43 @@ def load_mission_config(node) -> MissionConfig:
     cfg.altitude_tolerance_m  = _declare(node, "altitude_tolerance_m", 0.5)
     cfg.arrival_tolerance_m   = _declare(node, "arrival_tolerance_m", 1.5)
     cfg.arrival_timeout_s     = _declare(node, "arrival_timeout_s", 60.0)
-    cfg.goto_publish_count    = _declare(node, "goto_publish_count", 5)
+    cfg.goto_publish_count    = _declare(node, "goto_publish_count", 20)
+    cfg.arm_timeout_s         = _declare(node, "arm_timeout_s", 90.0)
+    cfg.land_timeout_s        = _declare(node, "land_timeout_s", 120.0)
+    cfg.stream_rate_hz        = _declare(node, "stream_rate_hz", 10.0)
 
-    # ── Mission Node Specific ────────────────────────────────────
+    # ── Mission start / reference QR ─────────────────────────────
     cfg.tick_rate_hz          = _declare(node, "tick_rate_hz", 2.0)
-    cfg.auto_start            = _declare(node, "auto_start", True)
-    cfg.rc_auto_channel       = _declare(node, "rc_auto_channel", 5)
-    cfg.rc_auto_pwm_thresh    = _declare(node, "rc_auto_pwm_thresh", 1500)
+    # Mission waits for the pilot's auto switch before doing anything.
+    cfg.require_rc_switch     = _declare(node, "require_rc_switch", True)
+    # PHYSICAL RC channel number, 1-based (CH7 -> RCIn.channels[6]).
+    cfg.rc_auto_channel       = _declare(node, "rc_auto_channel", 7)
+    cfg.rc_auto_pwm_thresh    = _declare(node, "rc_auto_pwm_thresh", 1700)
+    cfg.qr_scan_attempts      = _declare(node, "qr_scan_attempts", 3)
+    cfg.qr_scan_timeout_s     = _declare(node, "qr_scan_timeout_s", 60.0)
+    # Only for SITL (no downward camera): fly with qr_fallback_id when the
+    # reference scan fails. On hardware a failed scan keeps the drone grounded.
+    cfg.allow_qr_fallback     = _declare(node, "allow_qr_fallback", False)
     cfg.qr_fallback_id        = _declare(node, "qr_fallback_id", "QR_TARGET_DEMO_ID")
+
+    # ── Payload drop ─────────────────────────────────────────────
+    cfg.drop_arrival_tolerance_m = _declare(node, "drop_arrival_tolerance_m", 1.0)
+    cfg.drop_arrival_timeout_s   = _declare(node, "drop_arrival_timeout_s", 30.0)
+    cfg.drop_settle_s            = _declare(node, "drop_settle_s", 3.0)
+
+    # ── Obstacle sensor health (skyscan_avoidance coverage_guard) ─
+    # sensor_live False -> hold; still False after sensor_fail_timeout_s -> LAND.
+    # coverage_ok False in corridor 2 -> hold; after coverage_backoff_after_s
+    # back off coverage_backoff_m; still low after sensor_fail_timeout_s -> LAND.
+    cfg.require_avoidance_sensor  = _declare(node, "require_avoidance_sensor", True)
+    cfg.sensor_preflight_timeout_s = _declare(node, "sensor_preflight_timeout_s", 30.0)
+    cfg.sensor_fail_timeout_s     = _declare(node, "sensor_fail_timeout_s", 10.0)
+    cfg.coverage_backoff_after_s  = _declare(node, "coverage_backoff_after_s", 3.0)
+    cfg.coverage_backoff_m        = _declare(node, "coverage_backoff_m", 1.0)
 
     # ── Safety Monitor Specific ──────────────────────────────────
     cfg.safety_check_rate_hz     = _declare(node, "safety_check_rate_hz", 5.0)
-    cfg.pointcloud_noise_min_m   = _declare(node, "pointcloud_noise_min_m", 0.3)
+    cfg.oak_warning_dist_m       = _declare(node, "oak_warning_dist_m", 1.5)
     cfg.obstacle_warn_throttle_s = _declare(node, "obstacle_warn_throttle_s", 1.0)
 
     # ── Path Planner Specific ────────────────────────────────────
@@ -108,14 +125,9 @@ def load_mission_config(node) -> MissionConfig:
     cfg.rl_sensor_topic   = _declare(node, "rl_sensor_topic", "/oak/points")
 
     # ── Payload Specific ─────────────────────────────────────────
-    cfg.winch_channel       = _declare(node, "winch_channel", 9)
     cfg.release_channel     = _declare(node, "release_channel", 10)
-    cfg.winch_pwm_lower     = _declare(node, "winch_pwm_lower", 1100)
-    cfg.winch_pwm_stop      = _declare(node, "winch_pwm_stop", 1500)
     cfg.release_pwm_open    = _declare(node, "release_pwm_open", 1100)
     cfg.release_pwm_lock    = _declare(node, "release_pwm_lock", 1900)
-    cfg.lower_duration_s    = _declare(node, "lower_duration_s", 5.0)
-    cfg.contact_timeout_s   = _declare(node, "contact_timeout_s", 15.0)
     cfg.release_pause_s     = _declare(node, "release_pause_s", 1.0)
 
     return cfg

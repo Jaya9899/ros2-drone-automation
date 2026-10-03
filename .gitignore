@@ -31,3 +31,6 @@ __pycache__/
 
 # Organizer material (not our code)
 AeroTHON-main/
+
+# Python build artifacts
+*.egg-info/
