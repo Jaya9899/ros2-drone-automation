@@ -76,8 +76,6 @@ def generate_launch_description():
     payload_node = mission_node_of("payload", "payload_node")
     qr_scanner_node = mission_node_of("perception", "qr_scanner_node")
     mission_node = mission_node_of("mission_manager", "mission_node")
-    # perception/depth_processor_node is NOT started: skyscan_avoidance is the
-    # obstacle pipeline, and a second full-frame depth consumer costs Pi 5 CPU.
 
     # ================================================================
     # Downward camera: RPi Camera Module 3 via camera_ros

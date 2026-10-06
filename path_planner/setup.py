@@ -24,7 +24,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'drone_sim = path_planner.drone_sim:main',
             'path_planner_node = path_planner.path_planner_node:main',
         ],
     },

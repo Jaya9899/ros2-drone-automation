@@ -29,7 +29,6 @@ setup(
     entry_points={
         'console_scripts': [
             'qr_scanner_node = perception.qr_scanner_node:main',
-            'depth_processor_node = perception.depth_processor_node:main',
         ],
     },
 )

@@ -119,11 +119,6 @@ def load_mission_config(node) -> MissionConfig:
     cfg.corridor_entry_y            = _declare(node, "corridor_entry_y", 15.0)
     cfg.red_zone_buffer_m           = _declare(node, "red_zone_buffer_m", 0.5)
 
-    # ── RL Obstacle Avoidance (placeholder) ──────────────────────
-    cfg.use_rl_avoidance  = _declare(node, "use_rl_avoidance", False)
-    cfg.rl_model_path     = _declare(node, "rl_model_path", "")
-    cfg.rl_sensor_topic   = _declare(node, "rl_sensor_topic", "/oak/points")
-
     # ── Payload Specific ─────────────────────────────────────────
     cfg.release_channel     = _declare(node, "release_channel", 10)
     cfg.release_pwm_open    = _declare(node, "release_pwm_open", 1100)

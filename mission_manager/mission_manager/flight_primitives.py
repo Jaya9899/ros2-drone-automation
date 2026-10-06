@@ -43,7 +43,7 @@ def local_to_gps(x: float, y: float, olat: float, olon: float):
     """Convert local ENU offset (metres) to GPS lat/lon about an origin.
 
     x = East (-> longitude), y = North (-> latitude). Matches the proven
-    conversion used by the BCD lawnmower node.
+    conversion used by path_planner.waypoint_gen.
     """
     lat = olat + y / 111320.0
     lon = olon + x / (111320.0 * math.cos(math.radians(olat)))
