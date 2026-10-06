@@ -78,7 +78,6 @@ parts.append(box_visual_only("takeoff_landing_zone", 0, 0, 0.02, 4, 6, 0.02, (0.
 # ---- corridor: 10 m long (x=4..14), two 3.5 m lanes, 10 ft (3.048 m) walls ----
 H = 10.0          # wall height
 LANE_WIDTH = 3.5
-GAP = 2.0         # space between corridors
 WALL = 0.10
 GROUND_TOP = 0.001
 ARENA_TOP = 0.016

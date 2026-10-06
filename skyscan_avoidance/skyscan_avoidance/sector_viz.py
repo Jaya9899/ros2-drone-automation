@@ -62,7 +62,6 @@ class SectorViz(Node):
 
         self._lock = threading.Lock()
         self._depth = None          # (H, W) float32 metres
-        self._depth_enc = None
         self._last_depth_mono = None  # monotonic time of last depth frame
         self._ranges = None         # (n_bins,) float
         self._coverage = None
@@ -139,7 +138,6 @@ class SectorViz(Node):
         z = raw.astype(np.float32) * scale
         with self._lock:
             self._depth = z
-            self._depth_enc = enc
             self._last_depth_mono = time.monotonic()
 
     def _on_scan(self, msg):

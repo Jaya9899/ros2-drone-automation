@@ -23,7 +23,6 @@
 #   ros2 run mission_manager flight_primitives --ros-args -p altitude:=6.0 \
 #       -p wp_a:="[10.0, 0.0]" -p wp_b:="[10.0, 10.0]"
 
-import math
 import threading
 import time
 
@@ -34,29 +33,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 from sensor_msgs.msg import NavSatFix
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
-from mavros_msgs.srv import MessageInterval
 
 from mission_manager import mavros_utils as mav
-
-
-def local_to_gps(x: float, y: float, olat: float, olon: float):
-    """Convert local ENU offset (metres) to GPS lat/lon about an origin.
-
-    x = East (-> longitude), y = North (-> latitude). Matches the proven
-    conversion used by path_planner.waypoint_gen.
-    """
-    lat = olat + y / 111320.0
-    lon = olon + x / (111320.0 * math.cos(math.radians(olat)))
-    return lat, lon
-
-
-def haversine(lat1, lon1, lat2, lon2):
-    """Great-circle distance in metres between two GPS points."""
-    R = 6_371_000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 class FlightPrimitives(Node):
@@ -148,7 +126,7 @@ class FlightPrimitives(Node):
         deadline = time.time() + self.arrival_timeout
         while time.time() < deadline and rclpy.ok():
             if self._gps is not None:
-                d = haversine(self._gps[0], self._gps[1], lat, lon)
+                d = mav.haversine(self._gps[0], self._gps[1], lat, lon)
                 if d <= self.arrival_tol:
                     self.get_logger().info(f"  arrived ({d:.2f} m from target)")
                     return True
@@ -211,7 +189,7 @@ class FlightPrimitives(Node):
         if self._home is None:
             self.get_logger().error("  goto called before home fix acquired")
             return False
-        lat, lon = local_to_gps(x, y, self._home[0], self._home[1])
+        lat, lon = mav.offset_gps(self._home[0], self._home[1], y, x)
         self.get_logger().info(
             f"  goto local=({x:.1f},{y:.1f},{z:.1f}) -> ({lat:.7f},{lon:.7f})")
         mav.goto(self, lat, lon, z, publish_count=self.goto_stream_count)
@@ -246,38 +224,6 @@ class FlightPrimitives(Node):
         except Exception as e:  # never let cleanup mask the original failure
             self.get_logger().warn(f"cleanup error: {e}")
 
-    def _request_streams(self, rate_hz: float = 10.0) -> bool:
-        """Ask the FCU to stream the messages we depend on.
-
-        Required because we run --no-mavproxy: nothing else requests
-        ArduPilot's data streams, so position topics stay silent. ArduPilot 4.x
-        ignores the legacy REQUEST_DATA_STREAM (set_stream_rate), so we use
-        MAV_CMD_SET_MESSAGE_INTERVAL via /mavros/set_message_interval.
-
-            33 = GLOBAL_POSITION_INT -> /mavros/global_position/global (home + arrival)
-            32 = LOCAL_POSITION_NED  -> /mavros/local_position/pose    (altitude)
-        """
-        cli = self.create_client(MessageInterval, "/mavros/set_message_interval")
-        if not cli.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error("set_message_interval service unavailable")
-            return False
-        ok = True
-        for mid in (33, 32):
-            req = MessageInterval.Request()
-            req.message_id = mid
-            req.message_rate = float(rate_hz)
-            fut = cli.call_async(req)
-            t = time.time() + 5.0
-            while not fut.done() and time.time() < t and rclpy.ok():
-                time.sleep(0.05)
-            res = fut.result()
-            if res is not None and res.success:
-                self.get_logger().info(f"  streaming msg {mid} @ {rate_hz:.0f} Hz")
-            else:
-                self.get_logger().warn(f"  set_message_interval({mid}) not confirmed")
-                ok = False
-        return ok
-
     # ── Gate 1 sequence ──────────────────────────────────────────────────
     def _acquire_home(self, timeout: float = 30.0) -> bool:
         self.get_logger().info("Acquiring home GPS fix...")
@@ -298,7 +244,7 @@ class FlightPrimitives(Node):
                 self._finish(False)
                 return
             # --no-mavproxy: we must request our own data streams.
-            self._request_streams()
+            mav.request_message_intervals(self, (33, 32))  # GLOBAL_POSITION_INT, LOCAL_POSITION_NED
             if not self._acquire_home():
                 self._finish(False)
                 return

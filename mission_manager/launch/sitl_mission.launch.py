@@ -51,10 +51,6 @@ def generate_launch_description():
     }
 
     # ----- Launch arguments -----
-    use_sim_arg = DeclareLaunchArgument(
-        "use_sim", default_value="true",
-        description="Use simulation time",
-    )
     launch_mavros_arg = DeclareLaunchArgument(
         "launch_mavros", default_value="false",
         description="Launch MAVROS (set false if started separately)",
@@ -166,7 +162,6 @@ def generate_launch_description():
     # Assemble launch description
     # ================================================================
     return LaunchDescription([
-        use_sim_arg,
         launch_mavros_arg,
         fcu_url_arg,
 

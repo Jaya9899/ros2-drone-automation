@@ -405,7 +405,7 @@ def cmd_stage2_flight(a):
         m.recv_match(blocking=True, timeout=0.2)
     rc(m, **keep)
 
-    print(f"\n=== STAGE 2 RESULT ===")
+    print("\n=== STAGE 2 RESULT ===")
     print(f"closest_approach_m = {closest:.2f}   (judge against AVOID_MARGIN "
           f"1.2 m; drone should refuse to close within it)")
     with open(a.out, 'w') as f:

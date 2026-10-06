@@ -6,7 +6,6 @@
 #   /path_planner/fly_corridor_2   — obstacle corridor (corridor_obs_speed_ms)
 #   /path_planner/run_lawnmower    — BCD lawnmower search (arena_speed_ms)
 #   /path_planner/stop             — cancel the active leg and hold position
-#   /path_planner/stop_lawnmower   — alias of stop (backwards compatible)
 #
 # Response message is a machine-readable token first:
 #   OK | CANCELLED | BUSY | NO_GPS | WP_TIMEOUT ... | SENSOR_TIMEOUT ...
@@ -159,8 +158,6 @@ class PathPlannerNode(Node):
         self.create_service(Trigger, "/path_planner/run_lawnmower",
                             self._handle_run_lawnmower, callback_group=cb)
         self.create_service(Trigger, "/path_planner/stop",
-                            self._handle_stop, callback_group=cb)
-        self.create_service(Trigger, "/path_planner/stop_lawnmower",
                             self._handle_stop, callback_group=cb)
 
         self.get_logger().info(
