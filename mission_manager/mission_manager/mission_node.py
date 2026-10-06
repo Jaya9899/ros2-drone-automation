@@ -25,9 +25,9 @@ from std_msgs.msg import Bool, Float64, String
 from mavros_msgs.msg import State as MavrosState, RCIn
 from sensor_msgs.msg import BatteryState, NavSatFix, NavSatStatus
 
-from mission_manager import mavros_utils as mav
-from mission_manager import srv_helpers as srv
-from mission_manager.config_loader import load_mission_config
+from skyscan_common import mavros_utils as mav
+from skyscan_common import srv_helpers as srv
+from skyscan_common.config_loader import load_mission_config
 from mission_manager.state_machine import MissionSM
 
 

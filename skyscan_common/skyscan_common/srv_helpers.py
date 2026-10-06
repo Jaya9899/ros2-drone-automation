@@ -8,7 +8,7 @@
 # completes while another thread spins the node.
 #
 # Usage:
-#   from mission_manager.srv_helpers import call_trigger
+#   from skyscan_common.srv_helpers import call_trigger
 #   res = call_trigger(node, "/path_planner/fly_corridor_1",
 #                      call_timeout=130.0, should_abort=lambda: False)
 

@@ -383,7 +383,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_ref_target_A.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_ref_target_A.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -406,7 +406,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_A.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_A.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -429,7 +429,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_b.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_b.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -452,7 +452,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_c.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_c.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -475,7 +475,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_d.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_d.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -498,7 +498,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_e.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_e.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>
@@ -521,7 +521,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_arena/materials/textures/qr_target_f.png</albedo_map>
+                <albedo_map>/home/jaya9899/ros2_ws/src/skyscan_bringup/worlds/materials/textures/qr_target_f.png</albedo_map>
                 <metalness>0</metalness>
                 <roughness>1</roughness>
               </metal>

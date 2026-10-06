@@ -17,7 +17,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import String
 from sensor_msgs.msg import NavSatFix
 
-from mission_manager import mavros_utils as mav
+from skyscan_common import mavros_utils as mav
 
 
 class SitlQrSimulator(Node):

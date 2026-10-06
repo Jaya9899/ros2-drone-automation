@@ -3,17 +3,17 @@
 <package format="3">
   <name>path_planner</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Flies the mission legs (corridors, lawnmower search) as GUIDED waypoints via MAVROS.</description>
   <maintainer email="jaya9899@todo.todo">jaya9899</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
-  <depend>std_srvs</depend>
+  <depend>skyscan_common</depend>
+  <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>
-  <depend>geographic_msgs</depend>
-  <depend>mavros_msgs</depend>
-  <depend>mission_manager</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-shapely</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

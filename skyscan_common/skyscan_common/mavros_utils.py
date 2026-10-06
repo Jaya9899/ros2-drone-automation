@@ -1,7 +1,7 @@
 # mavros_utils.py — Synchronous wrappers for common MAVROS operations
 #
 # Usage:
-#   from mission_manager.mavros_utils import arm, set_mode, takeoff, goto
+#   from skyscan_common.mavros_utils import arm, set_mode, takeoff, goto
 #   set_mode(node, "GUIDED")
 #   arm(node)
 #   takeoff(node, altitude_m=5.0)

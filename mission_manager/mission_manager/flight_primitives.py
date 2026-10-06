@@ -34,7 +34,7 @@ from sensor_msgs.msg import NavSatFix
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 
-from mission_manager import mavros_utils as mav
+from skyscan_common import mavros_utils as mav
 
 
 class FlightPrimitives(Node):

@@ -8,7 +8,7 @@
 # without a YAML parameter file (e.g. in unit tests or demos).
 #
 # Usage:
-#   from mission_manager.config_loader import load_mission_config
+#   from skyscan_common.config_loader import load_mission_config
 #   cfg = load_mission_config(self)   # inside a Node.__init__
 #   print(cfg.cruise_altitude_m)
 

@@ -52,8 +52,8 @@ from std_srvs.srv import Trigger
 from std_msgs.msg import Bool
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
-from mission_manager import mavros_utils as mav
-from mission_manager.config_loader import load_mission_config
+from skyscan_common import mavros_utils as mav
+from skyscan_common.config_loader import load_mission_config
 from path_planner.waypoint_gen import (
     build_transit_space,
     generate_mission_waypoints,

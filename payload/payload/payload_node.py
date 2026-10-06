@@ -28,7 +28,7 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 from mavros_msgs.srv import CommandLong
 
-from mission_manager.config_loader import load_mission_config
+from skyscan_common.config_loader import load_mission_config
 
 MAV_CMD_DO_SET_SERVO = 183
 

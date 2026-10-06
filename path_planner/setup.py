@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='jaya9899',
     maintainer_email='jaya9899@todo.todo',
-    description='TODO: Package description',
+    description='Flies the mission legs (corridors, lawnmower search) as GUIDED waypoints via MAVROS.',
     license='TODO: License declaration',
     extras_require={
         'test': [

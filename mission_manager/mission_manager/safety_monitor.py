@@ -26,7 +26,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import Float32, String, Bool
 from sensor_msgs.msg import BatteryState, LaserScan
 
-from mission_manager.config_loader import load_mission_config
+from skyscan_common.config_loader import load_mission_config
 
 # Forward arc (each side of the nose) used for the obstacle warning.
 FORWARD_HALF_ARC_RAD = math.radians(35.0)

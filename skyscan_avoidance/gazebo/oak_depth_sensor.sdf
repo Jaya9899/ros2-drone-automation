@@ -14,7 +14,7 @@
         </link>
       </model>
 
-  Requirements on the WORLD (skyscan_arena/mission2_arena.sdf already has these):
+  Requirements on the WORLD (skyscan_bringup/worlds/mission2_arena.sdf already has these):
     - <plugin ... gz-sim-sensors-system> with a <render_engine> (ogre2), or the
       camera renders nothing.
     - SDF >= 1.9 / gz-sim8 (Harmonic).

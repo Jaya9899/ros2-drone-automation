@@ -17,7 +17,7 @@ The node operates in two modes, switched by the services below:
   - PHASE5: downward camera, multi-QR, match against Delivery ID,
             project target to NED, publish detection for mission manager
 
-Services (called by mission_manager/srv_helpers.py):
+Services (called by skyscan_common/srv_helpers.py):
     /perception/scan_qr          (Trigger)  — Phase 2: scan reference QR, blocks until confirmed
     /perception/start_qr_scan    (Trigger)  — Phase 5: start async arena QR scanning
 
@@ -178,7 +178,7 @@ class QRScannerNode(Node):
         # Mission manager interface — "content|lat|lon" format
         self._pub_qr_detection  = self.create_publisher(String,  "/qr/detection",          reliable_qos)
 
-        # ── Services (called by mission_manager/srv_helpers.py) ───────────────
+        # ── Services (called by skyscan_common/srv_helpers.py) ───────────────
         self.create_service(
             Trigger, "/perception/scan_qr",
             self._handle_scan_qr,
@@ -200,7 +200,7 @@ class QRScannerNode(Node):
         self.get_logger().info("[qr_scanner] Waiting for a service call...")
 
     # ═════════════════════════════════════════════════════════════════════════
-    # Service handlers (called by mission_manager/srv_helpers.py)
+    # Service handlers (called by skyscan_common/srv_helpers.py)
     # ═════════════════════════════════════════════════════════════════════════
 
     def _handle_scan_qr(self, request, response):

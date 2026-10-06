@@ -1,6 +1,6 @@
 # mission.launch.py — Master launch file for Aerothon UAS Mission 2 (hardware)
 #
-#   ros2 launch mission_manager mission.launch.py launch_mavros:=true \
+#   ros2 launch skyscan_bringup mission.launch.py launch_mavros:=true \
 #       fcu_url:=/dev/ttyAMA0:921600 launch_camera:=true
 #
 # Starts: MAVROS (optional), safety monitor, telemetry, path planner, payload,
@@ -32,8 +32,8 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    mission_mgr_share = get_package_share_directory("mission_manager")
-    mission_params = os.path.join(mission_mgr_share, "config", "mission_params.yaml")
+    mission_params = os.path.join(
+        get_package_share_directory("skyscan_bringup"), "config", "mission_params.yaml")
 
     # ----- Launch arguments -----
     launch_mavros_arg = DeclareLaunchArgument(

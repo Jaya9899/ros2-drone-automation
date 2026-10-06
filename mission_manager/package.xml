@@ -3,18 +3,16 @@
 <package format="3">
   <name>mission_manager</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Mission 2 state machine (mission_node) plus safety, telemetry, SITL QR simulator and flight-primitive test nodes.</description>
   <maintainer email="jaya9899@todo.todo">jaya9899</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>skyscan_common</depend>
   <depend>mavros_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>std_msgs</depend>
-  <exec_depend>skyscan_avoidance</exec_depend>
-  <exec_depend>depthai_ros_driver</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

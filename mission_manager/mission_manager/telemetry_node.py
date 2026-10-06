@@ -16,7 +16,7 @@ from std_msgs.msg import String
 from sensor_msgs.msg import BatteryState, NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
 
-from mission_manager.config_loader import load_mission_config
+from skyscan_common.config_loader import load_mission_config
 
 
 def _finite(obj):

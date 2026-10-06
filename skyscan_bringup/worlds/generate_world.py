@@ -2,7 +2,8 @@
 # Coordinate frame (SDF ENU, +X = forward/east, +Y = left/north, +Z = up):
 #   takeoff pad centered at origin; corridor along +X; arena beyond.
 import os
-TEX_DIR = os.path.expanduser("~/ros2_ws/src/skyscan_arena/materials/textures")
+HERE = os.path.dirname(os.path.abspath(__file__))
+TEX_DIR = os.path.join(HERE, "materials", "textures")
 def box_visual_only(name, x, y, z, sx, sy, sz, rgba, static=True):
     r,g,b,a = rgba
     return f'''    <model name="{name}">
@@ -379,5 +380,5 @@ sdf = f'''<?xml version="1.0" ?>
 </sdf>
 '''
 
-with open("mission2_arena.sdf","w") as f:
+with open(os.path.join(HERE, "mission2_arena.sdf"), "w") as f:
     f.write(sdf)

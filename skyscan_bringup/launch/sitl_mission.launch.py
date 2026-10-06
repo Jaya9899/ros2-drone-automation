@@ -1,7 +1,7 @@
 # sitl_mission.launch.py — Mission 2 stack against ArduPilot SITL
 #
-#   ros2 launch mission_manager sitl_mission.launch.py
-#   ros2 launch mission_manager sitl_mission.launch.py launch_mavros:=true
+#   ros2 launch skyscan_bringup sitl_mission.launch.py
+#   ros2 launch skyscan_bringup sitl_mission.launch.py launch_mavros:=true
 #
 # Same nodes as mission.launch.py minus the cameras and the OAK-D obstacle
 # pipeline (none exist in SITL); sitl_qr_simulator stands in for the downward
@@ -20,7 +20,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     mission_params = os.path.join(
-        get_package_share_directory("mission_manager"), "config", "mission_params.yaml")
+        get_package_share_directory("skyscan_bringup"), "config", "mission_params.yaml")
 
     # SITL has no RC pilot, no downward camera and no OAK-D, so the hardware
     # safety gates are relaxed here (and ONLY here). SITL also simulates a 3S

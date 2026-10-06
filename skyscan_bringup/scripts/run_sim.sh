@@ -2,11 +2,10 @@
 # ───────────────────────────────────────────────────────────────────
 # run_sim.sh — Start ArduPilot SITL + ROS 2 mission stack
 #
-# Usage:
-#   chmod +x run_sim.sh
-#   ./run_sim.sh                            # default location
-#   ./run_sim.sh --lat 12.9716 --lon 77.5946  # custom location
-#   ./run_sim.sh --mavros-only              # only start MAVROS
+# Usage (after colcon build; or run scripts/run_sim.sh from source):
+#   ros2 run skyscan_bringup run_sim.sh                            # default location
+#   ros2 run skyscan_bringup run_sim.sh --lat 12.9716 --lon 77.5946  # custom location
+#   ros2 run skyscan_bringup run_sim.sh --mavros-only              # only start MAVROS
 # ───────────────────────────────────────────────────────────────────
 
 set -e
@@ -84,7 +83,7 @@ echo "  MAVROS started"
 if [ "$MAVROS_ONLY" = true ]; then
     echo ""
     echo "  --mavros-only mode: SITL + MAVROS running. Launch mission manually:"
-    echo "  ros2 launch mission_manager sitl_mission.launch.py"
+    echo "  ros2 launch skyscan_bringup sitl_mission.launch.py"
     exit 0
 fi
 
@@ -94,7 +93,7 @@ echo "► Starting ROS2 mission stack..."
 gnome-terminal --title="Mission Stack" -- bash -c "
 source /opt/ros/jazzy/setup.bash
 source ${ROS2_WS}/install/setup.bash
-ros2 launch mission_manager sitl_mission.launch.py
+ros2 launch skyscan_bringup sitl_mission.launch.py
 exec bash" 2>/dev/null
 
 # ── TERMINAL 4: Telemetry Monitor ───────────────────────────────
