@@ -219,10 +219,18 @@ class MissionNode(Node):
     def _armed(self) -> bool:
         return bool(self.mavros_state is not None and self.mavros_state.armed)
 
-    def _goto_and_wait(self, lat, lon, alt, tolerance, timeout, face_target=True) -> bool:
+    def _goto_and_wait(self, lat, lon, alt, tolerance, timeout, speed, face_target=True) -> bool:
         """GUIDED goto with arrival check. Holds while the obstacle sensor is
         not live and re-sends the target once it recovers (the 10 s sensor
-        timeout in _tick() turns a long outage into an abort)."""
+        timeout in _tick() turns a long outage into an abort).
+
+        Speed: the first position target after another GUIDED submode (e.g.
+        takeoff) resets the limit to the FC's WP_SPD, so hold first, then
+        DO_CHANGE_SPEED, then the real target."""
+        if self.gps is not None:
+            mav.goto(self, self.gps[0], self.gps[1], alt, publish_count=3)
+        mav.change_speed(self, speed)
+
         def send():
             yaw = None
             if face_target and self.gps is not None:
@@ -392,7 +400,8 @@ class MissionNode(Node):
     def _drop_payload(self, qr_lat, qr_lon):
         alt = self.cfg.drop_altitude_m
         if not self._goto_and_wait(qr_lat, qr_lon, alt, self.cfg.drop_arrival_tolerance_m,
-                                   self.cfg.drop_arrival_timeout_s, face_target=False):
+                                   self.cfg.drop_arrival_timeout_s, self.cfg.arena_speed_ms,
+                                   face_target=False):
             self.get_logger().warn("[mission_node] Not settled over the QR — dropping anyway")
         self.sm.drop_position_reached()
         self._sleep(self.cfg.drop_settle_s)
@@ -440,7 +449,8 @@ class MissionNode(Node):
 
             self.sm.c2_complete()
             if not self._goto_and_wait(*self.home, self.cfg.cruise_altitude_m,
-                                       self.cfg.arrival_tolerance_m, self.cfg.arrival_timeout_s):
+                                       self.cfg.arrival_tolerance_m, self.cfg.arrival_timeout_s,
+                                       self.cfg.corridor_speed_ms):
                 self.get_logger().warn("[mission_node] Home not reached in time — landing here")
 
             self.sm.home_reached()

@@ -51,7 +51,7 @@
     coverage_min_valid: 0.40       # coverage below this -> coverage_ok False.
                                    # PLACEHOLDER until Gate 0D measures the real baseline outdoors.
     coverage_recover_hold_s: 1.0
-    viz_margin_ring_m: 1.2         # matches OA_MARGIN_MAX
+    viz_margin_ring_m: 0.6         # matches OA_MARGIN_MAX
 
     # --- sim only ---
     sim_dropout_fraction: 0.0       # inject random invalid pixels to fake textureless walls

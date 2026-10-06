@@ -45,7 +45,7 @@ class SectorViz(Node):
         self.declare_parameter('band_half_angle_deg', 3.0)
         self.declare_parameter('range_max_report_m', 6.0)
         self.declare_parameter('pitch_compensation', True)
-        self.declare_parameter('viz_margin_ring_m', 1.2)
+        self.declare_parameter('viz_margin_ring_m', 0.6)
         self.declare_parameter('depth_topic', '/oak/depth')
         self.declare_parameter('camera_info_topic', '/oak/depth/camera_info')
 

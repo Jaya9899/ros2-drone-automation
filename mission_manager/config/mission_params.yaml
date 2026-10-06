@@ -15,7 +15,8 @@
 # FC-side settings this stack relies on (set in Mission Planner):
 #   BATT_LOW_VOLT 14.0 / BATT_CRT_VOLT 13.6, BATT_FS_LOW_ACT, BATT_FS_CRT_ACT
 #   FENCE_* + arena polygon + red-zone exclusion polygons uploaded
-#   PRX1_TYPE 2, AVOID_*/OA_* (skyscan_avoidance/params/), SERVO10_FUNCTION 0,
+#   PRX1_TYPE 2, AVOID_*/OA_* (skyscan_avoidance/params/, OA_MARGIN_MAX 0.6),
+#   GUID_OPTIONS / WP_SPD are written by path_planner at runtime, SERVO10_FUNCTION 0,
 #   SERVO10_TRIM = release_pwm_lock, RC7 = mission auto switch
 
 # ─── Mission Node ─────────────────────────────────────────────────
@@ -26,6 +27,10 @@ mission_node:
     # Altitudes (m above home)
     drop_altitude_m: 5.0
     cruise_altitude_m: 5.0
+    # Speeds for mission_node's own gotos: fly-over-QR uses arena speed,
+    # homing uses corridor (clean) speed
+    arena_speed_ms: 1.5
+    corridor_speed_ms: 2.0
     # Timeouts
     service_timeout_s: 10.0
     altitude_timeout_s: 30.0
@@ -81,7 +86,7 @@ path_planner_node:
     cruise_altitude_m: 5.0
     # Leg speeds (m/s), applied with DO_CHANGE_SPEED at the start of each leg
     corridor_speed_ms: 2.0        # corridor 1 (clean)
-    corridor_obs_speed_ms: 1.0    # corridor 2 (obstacles)
+    corridor_obs_speed_ms: 1.0    # corridor 2 (obstacles) — written to FC WP_SPD
     arena_speed_ms: 1.5
     origin_lat: 12.9716
     origin_lon: 77.5946
@@ -108,6 +113,11 @@ path_planner_node:
     corridor_timeout_s: 120.0
     lawnmower_timeout_s: 600.0
     mavros_arrival_tolerance_m: 2.0
+    # Corridor 2 flies with BendyRuler: the planner sets FC GUID_OPTIONS bit 6
+    # for that leg only (and WP_SPD = corridor_obs_speed_ms). Put any other
+    # GUID_OPTIONS bits you want in guided_options_base.
+    corridor2_bendyruler: true
+    guided_options_base: 0
     # Obstacle sensor gating (hold / back off / fail)
     require_avoidance_sensor: true
     sensor_fail_timeout_s: 10.0

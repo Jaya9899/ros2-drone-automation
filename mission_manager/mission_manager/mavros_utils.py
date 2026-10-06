@@ -179,6 +179,33 @@ def change_speed(node: Node, speed_ms: float, timeout: float = 5.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# set_fcu_param — write one ArduPilot parameter (MAVROS 2: ParamSetV2)
+# ---------------------------------------------------------------------------
+def set_fcu_param(node: Node, name: str, value, timeout: float = 5.0) -> bool:
+    """Set an FCU parameter via /mavros/param/set (mavros_msgs/ParamSetV2).
+
+    ArduPilot stores PARAM_SET values to EEPROM, so keep writes rare (a few
+    per flight), never in a loop.
+    """
+    from mavros_msgs.srv import ParamSetV2
+    from rcl_interfaces.msg import ParameterType, ParameterValue
+
+    req = ParamSetV2.Request()
+    req.param_id = name
+    if isinstance(value, int) and not isinstance(value, bool):
+        req.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=value)
+    else:
+        req.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+
+    result = _call_service(node, ParamSetV2, "/mavros/param/set", req, timeout=timeout)
+    if result and result.success:
+        node.get_logger().info(f"[mavros_utils] FCU param {name} = {value}")
+        return True
+    node.get_logger().error(f"[mavros_utils] Failed to set FCU param {name} = {value}")
+    return False
+
+
+# ---------------------------------------------------------------------------
 # request_message_intervals — make ArduPilot stream what we subscribe to
 # ---------------------------------------------------------------------------
 def request_message_intervals(node: Node, message_ids=MISSION_STREAMS,

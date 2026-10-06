@@ -15,5 +15,5 @@ PRX1_TYPE        2
 # unknown name. It defaults to 0 = no correction, which is what we want since
 # we send body-frame. Gate 1C verifies this empirically.
 AVOID_ENABLE     7
-AVOID_MARGIN     1.2
+AVOID_MARGIN     0.6
 AVOID_BEHAVE     1

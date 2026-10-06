@@ -12,9 +12,20 @@
 #   OK | CANCELLED | BUSY | NO_GPS | WP_TIMEOUT ... | SENSOR_TIMEOUT ...
 #
 # Navigation: GUIDED GlobalPositionTarget setpoints (mavros_utils.goto), nose
-# pointed along the direction of travel so the forward OAK-D sees ahead, leg
-# speed set with MAV_CMD_DO_CHANGE_SPEED. Obstacle avoidance itself is
-# ArduPilot's (BendyRuler + proximity from skyscan_avoidance).
+# pointed along the direction of travel so the forward OAK-D sees ahead.
+#
+# ArduPilot 4.7.1 GUIDED has two ways to fly a position target, chosen by
+# GUID_OPTIONS bit 6 (mode_guided.cpp set_destination):
+#   bit 6 clear -> position controller straight to the target. Speed follows
+#                  MAV_CMD_DO_CHANGE_SPEED. NO object avoidance (BendyRuler
+#                  lives only in the waypoint navigator, AC_WPNav_OA).
+#   bit 6 set   -> waypoint navigator (S-curves) WITH BendyRuler. Speed is the
+#                  WP_SPD param read when this mode starts; DO_CHANGE_SPEED is
+#                  overwritten on every new target.
+# So corridor 2 (obstacles) runs with bit 6 set and WP_SPD = its speed; every
+# other leg runs with bit 6 clear and DO_CHANGE_SPEED. Each leg first sends a
+# hold target: entering a submode resets the speed limits to WP_SPD, so the
+# speed must be set AFTER that first target.
 #
 # Obstacle-sensor gating (coverage_guard topics), per leg:
 #   sensor_live False           -> hold position; resume when live again
@@ -53,6 +64,7 @@ from path_planner.waypoint_gen import (
 )
 
 _DOUBLE_ARRAY = ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY)
+GUID_OPT_WPNAV_FOR_POSITION = 1 << 6      # "Waypoint navigation used for position targets"
 
 
 class PathPlannerNode(Node):
@@ -79,6 +91,15 @@ class PathPlannerNode(Node):
                 self._red_zones.append(zone)
 
         self.declare_parameter("arena_edge_margin_m", 1.0)
+        # BendyRuler for corridor 2 (see header). guided_options_base holds any
+        # other GUID_OPTIONS bits you want set on the FC; bit 6 is managed here.
+        self.declare_parameter("corridor2_bendyruler", True)
+        self.declare_parameter("guided_options_base", 0)
+        self._corridor2_oa = bool(self.get_parameter("corridor2_bendyruler").value)
+        self._guid_options_base = int(self.get_parameter("guided_options_base").value) \
+            & ~GUID_OPT_WPNAV_FOR_POSITION
+        self._guid_options = None               # last value written to the FC
+        self._leg_oa = False                    # BendyRuler active on this leg
         edge_margin = float(self.get_parameter("arena_edge_margin_m").value)
 
         # ----- Lawnmower (routed around red zones) -----
@@ -196,7 +217,13 @@ class PathPlannerNode(Node):
 
     def _goto(self, latlon, alt):
         yaw = None
-        if self._gps is not None:
+        # With BendyRuler active, never pin the heading: the path bends away
+        # from the straight line to the waypoint, and the forward-only OAK-D
+        # (+-35 deg) must look where the vehicle is actually going. With yaw
+        # ignored, GUIDED's waypoint navigator faces the (OA-adjusted) travel
+        # direction itself. Pinning it toward the waypoint let the drone slide
+        # sideways into a wall it could not see (SITL, 2026-10-03).
+        if not self._leg_oa and self._gps is not None:
             yaw = mav.yaw_enu_towards(self._gps[0], self._gps[1], latlon[0], latlon[1])
         mav.goto(self, latlon[0], latlon[1], alt,
                  publish_count=self.cfg.goto_publish_count, yaw_enu=yaw)
@@ -261,8 +288,26 @@ class PathPlannerNode(Node):
         self.get_logger().warn(f"[path_planner] Low depth coverage — backing off {step:.1f} m")
         mav.goto(self, lat, lon, alt, publish_count=10)   # keep current heading
 
+    def _set_guided_options(self, use_oa: bool) -> bool:
+        want = self._guid_options_base | (GUID_OPT_WPNAV_FOR_POSITION if use_oa else 0)
+        if want == self._guid_options:
+            return True
+        if not mav.set_fcu_param(self, "GUID_OPTIONS", want):
+            return False
+        self._guid_options = want
+        return True
+
+    def _configure_leg(self, speed: float, use_oa: bool, alt: float) -> bool:
+        if use_oa and not mav.set_fcu_param(self, "WP_SPD", float(speed)):
+            return False
+        if not self._set_guided_options(use_oa):
+            return False
+        self._hold(alt)                 # enter the submode (resets speed limits)...
+        mav.change_speed(self, speed)   # ...then set the speed (position mode)
+        return True
+
     def _run_leg(self, leg: str, local_wps: list, speed: float, timeout: float,
-                 skip_timed_out_wps: bool):
+                 skip_timed_out_wps: bool, use_oa: bool = False):
         if not self._run_lock.acquire(blocking=False):
             return False, "BUSY another leg is active"
         try:
@@ -270,7 +315,9 @@ class PathPlannerNode(Node):
             if self._gps is None:
                 return False, "NO_GPS"
             alt = self.cfg.cruise_altitude_m
-            mav.change_speed(self, speed)
+            self._leg_oa = use_oa
+            if not self._configure_leg(speed, use_oa, alt):
+                return False, f"FCU_CONFIG could not configure {leg} (GUID_OPTIONS/WP_SPD)"
 
             # Route from where we are to the leg start around red zones.
             start = self._to_local(self._gps)
@@ -293,6 +340,11 @@ class PathPlannerNode(Node):
                 return False, f"{result} {leg} at WP{i + 1}/{len(route)}"
             return True, f"OK {leg} complete"
         finally:
+            self._leg_oa = False
+            if use_oa:
+                # Back to plain position control for whatever comes next
+                # (mission_node's drop/homing gotos assume it).
+                self._set_guided_options(False)
             self._run_lock.release()
 
     # ===================================================================
@@ -320,7 +372,8 @@ class PathPlannerNode(Node):
     def _handle_corridor_2(self, request, response):
         return self._respond(response, self._run_leg(
             "corridor_2", self._corridor2_local, self.cfg.corridor_obs_speed_ms,
-            self.cfg.corridor_timeout_s, skip_timed_out_wps=False))
+            self.cfg.corridor_timeout_s, skip_timed_out_wps=False,
+            use_oa=self._corridor2_oa))
 
     def _handle_run_lawnmower(self, request, response):
         return self._respond(response, self._run_leg(

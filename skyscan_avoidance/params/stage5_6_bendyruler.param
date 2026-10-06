@@ -1,20 +1,24 @@
 # stage5_6_bendyruler.param — Stages 5 (arena) and 6 (corridor).
-# Same code, same mode, same parameters for both: the corridor is just a
-# waypoint leg that happens to have walls near it. Object-avoidance path
-# planning (BendyRuler) deviates around obstacles between waypoints in AUTO.
+# Object-avoidance path planning (BendyRuler) deviates around obstacles
+# between waypoints. In GUIDED (how this stack flies) ArduPilot 4.7.1 only runs
+# BendyRuler when GUID_OPTIONS bit 6 is set (waypoint navigator for position
+# targets); path_planner sets that bit for corridor 2 only and clears it after.
 #
-# WHY THE MARGINS ARE 1.2, NOT 2.0 (trap: a 2.0 m margin cannot fit a 3.5 m
-# corridor — walls sit 1.75 m either side of centreline, so no point is 2 m
-# clear of both). 1.2 leaves ~0.55 m of slack either side. This single number
-# is the only place the corridor width enters the design.
+# WHY THE MARGINS ARE 0.6: BendyRuler passes between a wall and an obstacle
+# only if the gap is >= 2 x OA_MARGIN_MAX. In a 3.5 m corridor a 1.2 m margin
+# needs a 2.4 m lane, so a centred 0.8 m obstacle (1.35 m either side) blocks
+# the leg. 0.6 passes a 1.2 m gap, at the cost of flying ~0.6 m from walls and
+# obstacles — depth quality and position hold must support that. Obstacle
+# sizes/positions are unknown until the venue; revisit with real numbers.
 #
 # OA_MARGIN_MAX is BendyRuler's margin (AUTO/GUIDED); AVOID_MARGIN is simple
 # avoidance's (Loiter/AltHold). Different subsystems — confirm which is moving
-# before tuning (trap #6). Both 1.2 here.
+# before tuning (trap #6). Both 0.6 here.
 #
-# WPNAV_SPEED is CENTIMETRES/s and is STAGED (see Stage 8): 100 = 1.0 m/s is a
-# sim nominal. On hardware ramp 30 -> 150; the FIRST corridor flight is 30.
-# Entering 2 gives you 2 cm/s.
+# WP_SPD (4.7: replaces WPNAV_SPEED, now METRES/s) is corridor 2's speed:
+# path_planner writes corridor_obs_speed_ms into it at the start of corridor 2,
+# so the value here is just the boot default. Stage it on hardware via
+# corridor_obs_speed_ms: 0.3 -> 0.6 -> 1.0; the FIRST corridor flight is 0.3.
 #
 # REBOOT after loading (PRX1_TYPE and OA_TYPE both need it).
 PRX1_TYPE        2
@@ -25,12 +29,12 @@ PRX1_TYPE        2
 OA_TYPE          1
 OA_BR_TYPE       1
 OA_BR_LOOKAHEAD  4.0
-OA_MARGIN_MAX    1.2
+OA_MARGIN_MAX    0.6
 OA_DB_EXPIRE     3
-WPNAV_SPEED      100
+WP_SPD           1.0
 # Simple avoidance kept available for Loiter checks; harmless in AUTO.
 AVOID_ENABLE     7
-AVOID_MARGIN     1.2
+AVOID_MARGIN     0.6
 AVOID_BEHAVE     1
 # GCS failsafe = Land (5). Land, not RTL. RTL path may cross corridor walls:
 # an RTL triggered mid-corridor climbs to RTL_ALT and flies a straight line

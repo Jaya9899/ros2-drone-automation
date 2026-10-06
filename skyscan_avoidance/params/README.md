@@ -28,17 +28,29 @@ ros2 run mavros mavparam load params/stage5_6_bendyruler.param
 
 ## The values that are deliberately not 2.0
 
-`AVOID_MARGIN` and `OA_MARGIN_MAX` are both **1.2 m**, not 2.0. The corridor is
-3.5 m wide, so a 2.0 m margin fits nowhere in it; BendyRuler would weave down
-the centreline or refuse the leg. 1.2 is the only place corridor width enters
-the design — change this (and only this) if the venue corridor is narrower.
+`AVOID_MARGIN` and `OA_MARGIN_MAX` are both **0.6 m**. BendyRuler only passes
+between a wall and an obstacle when the gap is at least 2 × margin. The corridor
+is 3.5 m wide: with 1.2 m a centred 0.8 m obstacle (1.35 m clear either side)
+blocks the leg; with 0.6 m it passes. The cost is flying ~0.6 m from walls and
+obstacles. Obstacle sizes are unknown until the venue — revisit this number
+(and only this number) when they are known.
 
-## WPNAV_SPEED is staged
+## BendyRuler in GUIDED needs GUID_OPTIONS bit 6
 
-It is centimetres/second and it changes between sub-steps — do not treat the
-committed value as fixed. Sim nominal is 100 (1.0 m/s). On hardware, ramp
-30 → 60 → 100 → 150 per Stage 8, re-running the box test after each change; the
-**first corridor flight is 30**, never the open-field speed carried straight in.
+ArduPilot 4.7.1 GUIDED flies position targets with the plain position
+controller unless `GUID_OPTIONS` bit 6 (64) is set; only the waypoint navigator
+runs BendyRuler. `path_planner` sets bit 6 for corridor 2 and clears it after,
+so leave `GUID_OPTIONS` at 0 on the FC (or put extra bits in the planner's
+`guided_options_base`).
+
+## WP_SPD is staged (it replaced WPNAV_SPEED)
+
+4.7 renamed `WPNAV_SPEED` (cm/s) to `WP_SPD` (**m/s**); loading an old file with
+`WPNAV_SPEED` fails on that line. With bit 6 set, `WP_SPD` is the corridor-2
+speed — `DO_CHANGE_SPEED` is overwritten on every new target — so the planner
+writes `corridor_obs_speed_ms` into it at the start of the leg. Stage it on
+hardware through that parameter: 0.3 → 0.6 → 1.0 m/s, re-running the box test
+after each change; the **first corridor flight is 0.3**.
 
 ## Two subsystems, one trap
 

@@ -21,15 +21,23 @@
 # LaserScan is CCW/left-positive, OBSTACLE_DISTANCE is CW/right-indexed. Gate 1B
 # verifies the result empirically.
 
+import os
 
-import numpy as np
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+# mavros.mavlink.convert_to_rosmsg() emits a MAVLink v2 frame ONLY when this
+# variable is set; otherwise it writes a v1 header (magic 0xFE). OBSTACLE_DISTANCE
+# is msg id 330, which does not exist in v1, so mavros_router silently drops
+# every frame and ArduPilot reports "PRX1: No Data" (and refuses to arm).
+# Must be set before pymavlink is imported anywhere in this process.
+os.environ.setdefault('MAVLINK20', '1')
 
-from sensor_msgs.msg import LaserScan
+import numpy as np  # noqa: E402
+import rclpy  # noqa: E402
+from rclpy.node import Node  # noqa: E402
+from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 
-from skyscan_avoidance import geometry as g
+from sensor_msgs.msg import LaserScan  # noqa: E402
+
+from skyscan_avoidance import geometry as g  # noqa: E402
 
 MAVLINK_UNKNOWN = 65535          # UINT16_MAX: "no reading" in OBSTACLE_DISTANCE
 
@@ -146,8 +154,10 @@ class ObstaclePublisherNode(Node):
             self._mav.mav.obstacle_distance_send(**args)
         else:
             msg = self._encoder.obstacle_distance_encode(**args)
-            # pack() needs the encoder as the mav backend to fill CRC/seq.
+            # pack() needs the encoder as the mav backend to fill CRC/seq;
+            # it does not advance seq (only send() does), so do it here.
             msg.pack(self._encoder)
+            self._encoder.seq = (self._encoder.seq + 1) % 256
             self._sink_pub.publish(self._convert(msg))
 
 
