@@ -8,15 +8,12 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
-  <depend>skyscan_common</depend>
+  <depend>mission_common</depend>
   <depend>mavros_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
 
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>

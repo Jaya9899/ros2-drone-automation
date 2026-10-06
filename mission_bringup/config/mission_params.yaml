@@ -1,0 +1,160 @@
+# mission_params.yaml — Central configuration for Mission 2
+#
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  UPDATE THESE ON COMPETITION DAY:                                ║
+# ║    - origin_lat / origin_lon  (GPS origin of the arena)          ║
+# ║    - geofence_points          (arena boundary GPS polygon)       ║
+# ║    - red_zone_N_x / _y        (no-fly zone vertices)             ║
+# ║    - corridor1_ / corridor2_waypoints_x/y (two DIFFERENT corridors)║
+# ║    - qr_content / qr_location (SITL QR simulator targets)        ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+#
+# Local frame for all *_x / *_y lists: metres ENU about (origin_lat,
+# origin_lon), x = East, y = North.
+#
+# FC-side settings this stack relies on (set in Mission Planner):
+#   BATT_LOW_VOLT 14.0 / BATT_CRT_VOLT 13.6, BATT_FS_LOW_ACT, BATT_FS_CRT_ACT
+#   FENCE_* + arena polygon + red-zone exclusion polygons uploaded
+#   PRX1_TYPE 2, AVOID_*/OA_* (obstacle_avoidance/params/, OA_MARGIN_MAX 0.6),
+#   GUID_OPTIONS / WP_SPD are written by path_planner at runtime, SERVO10_FUNCTION 0,
+#   SERVO10_TRIM = release_pwm_lock, RC7 = mission auto switch
+
+# ─── Mission Node ─────────────────────────────────────────────────
+mission_node:
+  ros__parameters:
+    # Altitudes (m above home)
+    drop_altitude_m: 5.0
+    cruise_altitude_m: 5.0
+    # Speeds for mission_node's own gotos: fly-over-QR uses arena speed,
+    # homing uses corridor (clean) speed
+    arena_speed_ms: 1.5
+    corridor_speed_ms: 2.0
+    # Timeouts
+    service_timeout_s: 10.0
+    altitude_timeout_s: 30.0
+    altitude_tolerance_m: 0.5
+    arrival_tolerance_m: 1.5
+    arrival_timeout_s: 60.0
+    goto_publish_count: 20
+    arm_timeout_s: 90.0
+    land_timeout_s: 120.0
+    corridor_timeout_s: 120.0
+    lawnmower_timeout_s: 600.0
+    stream_rate_hz: 10.0
+    # Start gate: physical RC channel (1-based), switch HIGH = mission runs,
+    # flipping it LOW at any time aborts and hands control to the pilot (LOITER).
+    require_rc_switch: true
+    rc_auto_channel: 7
+    rc_auto_pwm_thresh: 1700
+    # Reference QR: retried on the ground; never fly with a guessed ID.
+    qr_scan_attempts: 3
+    qr_scan_timeout_s: 60.0
+    allow_qr_fallback: false
+    qr_fallback_id: "QR_TARGET_DEMO_ID"
+    # Drop: fly over the projected QR position, settle, release.
+    drop_arrival_tolerance_m: 1.0
+    drop_arrival_timeout_s: 30.0
+    drop_settle_s: 3.0
+    # Battery (4S under load). Companion only stops the mission; the FC acts.
+    battery_critical_v: 13.6
+    # Obstacle sensor health (obstacle_avoidance coverage_guard)
+    require_avoidance_sensor: true
+    sensor_preflight_timeout_s: 30.0
+    sensor_fail_timeout_s: 10.0
+
+# ─── Safety Monitor ──────────────────────────────────────────────
+safety_monitor:
+  ros__parameters:
+    battery_critical_v: 13.6
+    battery_warning_v: 14.0
+    oak_warning_dist_m: 1.5
+    safety_check_rate_hz: 5.0
+    obstacle_warn_throttle_s: 1.0
+    # Geofence polygon (flat list: lat0,lon0, lat1,lon1, ...) — logged for
+    # cross-checking; the fence itself is uploaded on the FC.
+    geofence_points: [12.97100, 77.59400, 12.97100, 77.59500,
+                      12.97220, 77.59500, 12.97220, 77.59400]
+
+# ─── Path Planner ─────────────────────────────────────────────────
+path_planner_node:
+  ros__parameters:
+    arena_width_m: 40.0
+    arena_height_m: 30.0
+    cruise_altitude_m: 5.0
+    # Leg speeds (m/s), applied with DO_CHANGE_SPEED at the start of each leg
+    corridor_speed_ms: 2.0        # corridor 1 (clean)
+    corridor_obs_speed_ms: 1.0    # corridor 2 (obstacles) — written to FC WP_SPD
+    arena_speed_ms: 1.5
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    # Downward RPi Camera Module 3: 66 deg standard, 102 deg Wide
+    down_cam_hfov_deg: 66.0
+    strip_overlap: 0.20           # fraction of footprint shared by adjacent strips
+    goto_publish_count: 20
+    # Corridor 1 (clean) — PLACEHOLDER
+    corridor1_waypoints_x: [0.0, 2.5, 5.0, 7.5, 10.0]
+    corridor1_waypoints_y: [15.0, 15.0, 15.0, 15.0, 15.0]
+    # Corridor 2 (static obstacles), a different corridor — PLACEHOLDER
+    corridor2_waypoints_x: [10.0, 7.5, 5.0, 2.5, 0.0]
+    corridor2_waypoints_y: [-5.0, -5.0, -5.0, -5.0, -5.0]
+    red_zone_1_x: [24.0, 36.0, 36.0, 24.0]
+    red_zone_1_y: [12.0, 12.0, 22.0, 22.0]
+    red_zone_2_x: [10.0, 15.0, 12.5]
+    red_zone_2_y: [5.0, 5.0, 10.0]
+    red_zone_3_x: [5.0, 10.0, 10.0, 7.0, 7.0, 5.0]
+    red_zone_3_y: [20.0, 20.0, 22.0, 22.0, 25.0, 25.0]
+    red_zone_buffer_m: 0.5
+    arena_edge_margin_m: 1.0      # lawnmower stays this far inside the arena edge
+    corridor_entry_x: 0.0
+    corridor_entry_y: 15.0
+    corridor_timeout_s: 120.0
+    lawnmower_timeout_s: 600.0
+    mavros_arrival_tolerance_m: 2.0
+    # Corridor 2 flies with BendyRuler: the planner sets FC GUID_OPTIONS bit 6
+    # for that leg only (and WP_SPD = corridor_obs_speed_ms). Put any other
+    # GUID_OPTIONS bits you want in guided_options_base.
+    corridor2_bendyruler: true
+    guided_options_base: 0
+    # Obstacle sensor gating (hold / back off / fail)
+    require_avoidance_sensor: true
+    sensor_fail_timeout_s: 10.0
+    coverage_backoff_after_s: 3.0
+    coverage_backoff_m: 1.0
+
+# ─── Payload Node ─────────────────────────────────────────────────
+payload_node:
+  ros__parameters:
+    release_channel: 10
+    release_pwm_open: 1100
+    release_pwm_lock: 1900
+    release_pause_s: 1.0
+
+# ─── Telemetry Node ───────────────────────────────────────────────
+telemetry_node:
+  ros__parameters:
+    publish_rate_hz: 2.0
+
+# ─── SITL QR Simulator ───────────────────────────────────────────
+sitl_qr_simulator:
+  ros__parameters:
+    qr_location_lat: 12.9717
+    qr_location_lon: 77.5947
+    qr_content: "QR_TARGET_DEMO_ID"
+    detection_radius_m: 10.0
+
+# ─── QR Scanner Node (qr_detection) ────────────────────────────────
+qr_scanner_node:
+  ros__parameters:
+    gate_required: 3
+    min_confidence: 0.5
+    delivery_altitude: 5.0        # fallback only; rel_alt is used when available
+    scan_timeout_s: 60.0
+    cam_yaw_offset_deg: 0.0       # image top -> nose; rotate if mounted otherwise
+    # Camera intrinsics — RPi Camera Module 3 at 1280x720 (approximate).
+    # Overridden by /camera_info when camera_ros publishes a calibration.
+    # To calibrate: ros2 run camera_calibration cameracalibrator
+    #   --size 8x6 --square 0.025 image:=/down_frame
+    camera_fx: 920.0
+    camera_fy: 920.0
+    camera_cx: 640.0
+    camera_cy: 360.0

@@ -5,7 +5,7 @@
 #      battery failsafe is ArduPilot's (BATT_LOW_VOLT / BATT_CRT_VOLT /
 #      BATT_FS_LOW_ACT / BATT_FS_CRT_ACT); mission_node stops commanding on
 #      critical so the two never fight.
-#   2. Forward obstacle proximity from /avoidance/scan (skyscan_avoidance)
+#   2. Forward obstacle proximity from /avoidance/scan (obstacle_avoidance)
 #      -> /safety/obstacle_distance, /safety/obstacle_warning.
 #   3. Geofence: logs the configured polygon. The fence itself must be set on
 #      the FC (Mission Planner: FENCE_ENABLE/FENCE_TYPE/FENCE_ACTION/
@@ -26,7 +26,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import Float32, String, Bool
 from sensor_msgs.msg import BatteryState, LaserScan
 
-from skyscan_common.config_loader import load_mission_config
+from mission_common.config_loader import load_mission_config
 
 # Forward arc (each side of the nose) used for the obstacle warning.
 FORWARD_HALF_ARC_RAD = math.radians(35.0)

@@ -25,9 +25,9 @@ from std_msgs.msg import Bool, Float64, String
 from mavros_msgs.msg import State as MavrosState, RCIn
 from sensor_msgs.msg import BatteryState, NavSatFix, NavSatStatus
 
-from skyscan_common import mavros_utils as mav
-from skyscan_common import srv_helpers as srv
-from skyscan_common.config_loader import load_mission_config
+from mission_common import mavros_utils as mav
+from mission_common import srv_helpers as srv
+from mission_common.config_loader import load_mission_config
 from mission_manager.state_machine import MissionSM
 
 
@@ -64,7 +64,7 @@ class MissionNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        # Target ID for the perception Phase-5 matcher (latched so a late
+        # Target ID for the qr_scanner_node Phase-5 matcher (latched so a late
         # subscriber still gets it).
         self.delivery_id_pub = self.create_publisher(String, "/qr_scanner/delivery_id", latched)
 

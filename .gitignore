@@ -1,36 +1,21 @@
+# Separate repos / reference material kept next to the packages
 depthai-ros/
 vision_opencv/
-.vscode/
-.vscode/
-*.db
+AeroTHON-main/
 
-# SITL runtime artifacts
+# Editor
+.vscode/
+
+# SITL runtime output (sim_vehicle.py writes these into its cwd)
 eeprom.bin
 mav.parm
-mav.tlog
-mav.tlog.raw
-*.tlog
-*.tlog.raw
-
-# Python
-__pycache__/
-*.pyc
-
-# SITL runtime artifacts
-eeprom.bin
-mav.parm
-mav.tlog
-mav.tlog.raw
 *.tlog
 *.tlog.raw
 terrain/
+logs/
 
 # Python
 __pycache__/
 *.pyc
-
-# Organizer material (not our code)
-AeroTHON-main/
-
-# Python build artifacts
 *.egg-info/
+.pytest_cache/

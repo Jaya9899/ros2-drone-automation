@@ -17,7 +17,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import String
 from sensor_msgs.msg import NavSatFix
 
-from skyscan_common import mavros_utils as mav
+from mission_common import mavros_utils as mav
 
 
 class SitlQrSimulator(Node):
@@ -74,7 +74,7 @@ class SitlQrSimulator(Node):
 
         if dist <= self.det_radius:
             self._last_pub = now
-            # Publish in the same format the perception node uses
+            # Publish in the same format qr_scanner_node uses
             detection = f"{self.qr_content}|{self.qr_lat}|{self.qr_lon}"
             out = String()
             out.data = detection

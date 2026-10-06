@@ -17,11 +17,6 @@ setup(
     maintainer_email='jaya9899@todo.todo',
     description='Payload release servo (/payload/release) via MAV_CMD_DO_SET_SERVO.',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
     entry_points={
         'console_scripts': [
             'payload_node = payload.payload_node:main',
