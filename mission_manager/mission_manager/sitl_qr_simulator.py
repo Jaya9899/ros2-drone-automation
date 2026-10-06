@@ -9,7 +9,6 @@
 #   ros2 run mission_manager sitl_qr_simulator --ros-args \
 #       -p qr_location_lat:=12.9718 -p qr_location_lon:=77.5948
 
-import math
 import time
 
 import rclpy
@@ -18,14 +17,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import String
 from sensor_msgs.msg import NavSatFix
 
-from mission_manager.config_loader import load_mission_config
+from mission_manager import mavros_utils as mav
 
 
 class SitlQrSimulator(Node):
     def __init__(self):
         super().__init__("sitl_qr_simulator")
-        self.cfg = load_mission_config(self)
-
         # QoS profile for high-frequency telemetry / sensors
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -67,24 +64,13 @@ class SitlQrSimulator(Node):
             f"detect within {self.det_radius} m"
         )
 
-    @staticmethod
-    def _haversine(lat1, lon1, lat2, lon2):
-        """Return distance in metres between two GPS points."""
-        R = 6_371_000.0
-        phi1, phi2 = math.radians(lat1), math.radians(lat2)
-        dphi = math.radians(lat2 - lat1)
-        dlam = math.radians(lon2 - lon1)
-        a = (math.sin(dphi / 2) ** 2 +
-             math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
-        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
     def _gps_cb(self, msg: NavSatFix):
         now = time.monotonic()
         if now - self._last_pub < self._republish_period_s:
             return
 
-        dist = self._haversine(msg.latitude, msg.longitude,
-                               self.qr_lat, self.qr_lon)
+        dist = mav.haversine(msg.latitude, msg.longitude,
+                             self.qr_lat, self.qr_lon)
 
         if dist <= self.det_radius:
             self._last_pub = now

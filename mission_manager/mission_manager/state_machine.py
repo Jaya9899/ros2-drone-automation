@@ -101,13 +101,3 @@ class MissionSM(StateMachine):
     def on_enter_DROPPING(self):
         self.drop_confirmed = False
 
-
-if __name__ == "__main__":
-    sm = MissionSM()
-    sm.auto_activate()
-    sm.mission_target_qr = "QR_TARGET_DEMO_ID"
-    for ev in ("qr_scanned", "airborne", "c1_complete", "qr_matched",
-               "drop_position_reached", "drop_complete", "c2_complete",
-               "home_reached", "touchdown"):
-        sm.send(ev)
-    print(f"Final state : {sm.state_id}")

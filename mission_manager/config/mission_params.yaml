@@ -22,8 +22,6 @@
 # ─── Mission Node ─────────────────────────────────────────────────
 mission_node:
   ros__parameters:
-    arena_width_m: 40.0
-    arena_height_m: 30.0
     # Altitudes (m above home)
     drop_altitude_m: 5.0
     cruise_altitude_m: 5.0
@@ -59,7 +57,6 @@ mission_node:
     drop_settle_s: 3.0
     # Battery (4S under load). Companion only stops the mission; the FC acts.
     battery_critical_v: 13.6
-    battery_warning_v: 14.0
     # Obstacle sensor health (skyscan_avoidance coverage_guard)
     require_avoidance_sensor: true
     sensor_preflight_timeout_s: 30.0
@@ -150,12 +147,13 @@ qr_scanner_node:
   ros__parameters:
     gate_required: 3
     min_confidence: 0.5
-    stop_confidence: 0.7
     delivery_altitude: 5.0        # fallback only; rel_alt is used when available
     scan_timeout_s: 60.0
     cam_yaw_offset_deg: 0.0       # image top -> nose; rotate if mounted otherwise
     # Camera intrinsics — RPi Camera Module 3 at 1280x720 (approximate).
     # Overridden by /camera_info when camera_ros publishes a calibration.
+    # To calibrate: ros2 run camera_calibration cameracalibrator
+    #   --size 8x6 --square 0.025 image:=/down_frame
     camera_fx: 920.0
     camera_fy: 920.0
     camera_cx: 640.0

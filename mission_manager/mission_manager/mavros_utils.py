@@ -19,18 +19,8 @@ import math
 import time
 
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from mavros_msgs.srv import CommandBool, CommandLong, CommandTOL, MessageInterval, SetMode
-
-# QoS profile for high-frequency telemetry / sensors
-# MAVROS publishes these as BEST_EFFORT
-sensor_qos = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    durability=DurabilityPolicy.VOLATILE,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=10
-)
 
 MAV_CMD_DO_CHANGE_SPEED = 178
 

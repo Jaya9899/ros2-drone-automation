@@ -24,11 +24,6 @@
 #       ONLY during the corridor leg. Acting on it in the arena would hold the
 #       mission almost continuously.
 #
-#   /avoidance/safe_to_proceed (Bool) — DEPRECATED. Published as
-#       (sensor_live AND coverage_ok) so nothing downstream breaks during the
-#       transition. New FSM logic should consume the two signals above; this
-#       will be removed once the mission package stops reading it.
-#
 # NOTE: there is deliberately NO "scan all-inf" condition. An all-inf scan is
 # the normal state in open terrain, and a genuinely blind camera is already
 # caught by coverage (which counts valid PIXELS, not obstacle bins). Testing
@@ -137,8 +132,6 @@ class CoverageGuardNode(Node):
             Bool, '/avoidance/sensor_live', 10)
         self.pub_cov = self.create_publisher(
             Bool, '/avoidance/coverage_ok', 10)
-        self.pub_safe = self.create_publisher(      # DEPRECATED, see docstring
-            Bool, '/avoidance/safe_to_proceed', 10)
 
         # /avoidance/scan is published RELIABLE (to match MAVROS), so subscribe
         # RELIABLE to align with the publisher. Coverage is still BEST_EFFORT
@@ -193,7 +186,6 @@ class CoverageGuardNode(Node):
 
         self.pub_live.publish(Bool(data=live))
         self.pub_cov.publish(Bool(data=cov))
-        self.pub_safe.publish(Bool(data=(live and cov)))    # DEPRECATED
 
         if not self._published_once:
             self._published_once = True

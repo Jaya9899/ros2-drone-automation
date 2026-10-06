@@ -1,5 +1,3 @@
-import os
-from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'perception'
@@ -12,14 +10,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jaya9899',
     maintainer_email='jaya9899@todo.todo',
-    description='AeroTHON perception stack — QR detection, depth processing',
+    description='Downward-camera QR detection and ground projection for Mission 2',
     license='MIT',
     extras_require={
         'test': [

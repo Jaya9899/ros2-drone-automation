@@ -12,7 +12,7 @@ Works identically on:
   - Gazebo simulation (camera plugin publishing sensor_msgs/Image)
   - SITL (uses sitl_qr_simulator publishing to /qr/detection directly)
 
-The node operates in two modes, switched by the FSM:
+The node operates in two modes, switched by the services below:
   - PHASE2: downward camera, single QR, store Delivery ID
   - PHASE5: downward camera, multi-QR, match against Delivery ID,
             project target to NED, publish detection for mission manager
@@ -25,16 +25,11 @@ Subscriptions:
     /down_frame             (sensor_msgs/Image)     — camera frames
     /mavros/global_position/rel_alt     (std_msgs/Float64) — altitude above home
     /mavros/global_position/compass_hdg (std_msgs/Float64) — heading, deg CW from North
-    /qr_scanner/mode        (std_msgs/String)        — manual mode override
     /qr_scanner/delivery_id (std_msgs/String)        — inject stored ID (Phase 5)
     /mavros/global_position/global (sensor_msgs/NavSatFix) — GPS for detection publishing
     /camera_info            (sensor_msgs/CameraInfo)  — camera intrinsics
 
 Publications:
-    /delivery_id            (std_msgs/String)        — confirmed delivery ID (Phase 2)
-    /qr_count               (std_msgs/Int32)         — number of QR codes detected this frame
-    /target_waypoint        (geometry_msgs/Point)    — target NED position (Phase 5)
-    /qr_scanner/stop_move   (std_msgs/Bool)          — True when confidence > stop threshold
     /qr_scanner/status      (std_msgs/String)        — human-readable status for debugging
     /qr/detection           (std_msgs/String)        — "content|qr_lat|qr_lon" for mission_node,
                                                        published ONLY after the confirmation gate
@@ -42,14 +37,13 @@ Publications:
 Parameters (set via ROS2 param file or command line):
     gate_required       int   (default 3)    — frames for confirmation gate
     min_confidence      float (default 0.5)  — minimum confidence to enter gate
-    stop_confidence     float (default 0.7)  — confidence to trigger movement stop
     delivery_altitude   float (default 5.0)  — fallback altitude when rel_alt is unavailable
     scan_timeout_s      float (default 60.0) — Phase 2 service timeout
     cam_yaw_offset_deg  float (default 0.0)  — image-top direction vs nose, deg clockwise
     camera_fx/fy/cx/cy  float                — camera intrinsics from calibration
 
 ROS2 dependencies:
-    rclpy, sensor_msgs, std_msgs, std_srvs, geometry_msgs, cv_bridge
+    rclpy, sensor_msgs, std_msgs, std_srvs, cv_bridge
 """
 
 import math
@@ -61,9 +55,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg   import Image, CameraInfo, NavSatFix
-from std_msgs.msg      import String, Int32, Bool, Float64
+from std_msgs.msg      import String, Float64
 from std_srvs.srv      import Trigger
-from geometry_msgs.msg import Point
 
 from cv_bridge import CvBridge
 
@@ -86,8 +79,8 @@ class QRScannerNode(Node):
 
     Mode switching:
         The node starts in IDLE mode and does nothing.
-        Services or topic commands activate PHASE2 or PHASE5.
-        Publishing 'IDLE' or 'RESET' to /qr_scanner/mode stops processing.
+        /perception/scan_qr activates PHASE2, /perception/start_qr_scan PHASE5;
+        each returns to IDLE once its gate confirms.
     """
 
     # Valid mode strings
@@ -104,7 +97,6 @@ class QRScannerNode(Node):
         # ── Parameters ────────────────────────────────────────────────────────
         self.declare_parameter("gate_required",     3)
         self.declare_parameter("min_confidence",    0.5)
-        self.declare_parameter("stop_confidence",   0.7)
         self.declare_parameter("delivery_altitude", 5.0)
         self.declare_parameter("scan_timeout_s",    60.0)
         self.declare_parameter("cam_yaw_offset_deg", 0.0)
@@ -117,7 +109,6 @@ class QRScannerNode(Node):
 
         self._gate_required     = self.get_parameter("gate_required").value
         self._min_confidence    = self.get_parameter("min_confidence").value
-        self._stop_confidence   = self.get_parameter("stop_confidence").value
         self._delivery_altitude = self.get_parameter("delivery_altitude").value
         self._scan_timeout_s    = float(self.get_parameter("scan_timeout_s").value)
         self._cam_yaw_offset    = float(self.get_parameter("cam_yaw_offset_deg").value)
@@ -130,7 +121,6 @@ class QRScannerNode(Node):
         self._mode          = self.MODE_IDLE
         self._gate          = ConfirmationGate(required=self._gate_required)
         self._delivery_id   : str | None = None   # set after Phase 2 confirms
-        self._stop_sent     : bool       = False   # Phase 5 stop trigger (one-shot)
         self._current_alt   : float | None = None   # rel_alt, metres above home
         self._heading_deg   : float | None = None   # compass heading
         self._bridge        = CvBridge()
@@ -169,9 +159,6 @@ class QRScannerNode(Node):
             Image, "/down_frame", self._frame_cb, sensor_qos)
 
         self.create_subscription(
-            String, "/qr_scanner/mode", self._mode_cb, reliable_qos)
-
-        self.create_subscription(
             String, "/qr_scanner/delivery_id", self._delivery_id_cb, latched_qos)
 
         self.create_subscription(
@@ -187,10 +174,6 @@ class QRScannerNode(Node):
             self._gps_cb, mavros_qos)
 
         # ── Publishers ────────────────────────────────────────────────────────
-        self._pub_delivery_id   = self.create_publisher(String,  "/delivery_id",          reliable_qos)
-        self._pub_qr_count      = self.create_publisher(Int32,   "/qr_count",              sensor_qos)
-        self._pub_target        = self.create_publisher(Point,   "/target_waypoint",       reliable_qos)
-        self._pub_stop_move     = self.create_publisher(Bool,    "/qr_scanner/stop_move",  reliable_qos)
         self._pub_status        = self.create_publisher(String,  "/qr_scanner/status",     reliable_qos)
         # Mission manager interface — "content|lat|lon" format
         self._pub_qr_detection  = self.create_publisher(String,  "/qr/detection",          reliable_qos)
@@ -209,13 +192,12 @@ class QRScannerNode(Node):
 
         self.get_logger().info(
             f"[qr_scanner] Started | detector: {DETECTOR_NAME} | "
-            f"gate={self._gate_required} | min_conf={self._min_confidence} | "
-            f"stop_conf={self._stop_confidence}"
+            f"gate={self._gate_required} | min_conf={self._min_confidence}"
         )
         self.get_logger().info(
             "[qr_scanner] Services: /perception/scan_qr, /perception/start_qr_scan"
         )
-        self.get_logger().info("[qr_scanner] Waiting for mode or service call...")
+        self.get_logger().info("[qr_scanner] Waiting for a service call...")
 
     # ═════════════════════════════════════════════════════════════════════════
     # Service handlers (called by mission_manager/srv_helpers.py)
@@ -269,7 +251,6 @@ class QRScannerNode(Node):
 
         # Reset gate for Phase 5
         self._gate.reset()
-        self._stop_sent = False
         self._mode = self.MODE_PHASE5
         self._publish_status("PHASE5_ACTIVE")
 
@@ -280,24 +261,6 @@ class QRScannerNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
     # Subscriber callbacks
     # ═════════════════════════════════════════════════════════════════════════
-
-    def _mode_cb(self, msg: String) -> None:
-        """Switch operating mode. Can be published by FSM or manually."""
-        new_mode = msg.data.strip().upper()
-        if new_mode not in (self.MODE_IDLE, self.MODE_PHASE2, self.MODE_PHASE5, "RESET"):
-            self.get_logger().warn(f"[qr_scanner] Unknown mode '{new_mode}' — ignoring.")
-            return
-
-        if new_mode == "RESET":
-            self._reset()
-            return
-
-        if new_mode != self._mode:
-            self.get_logger().info(f"[qr_scanner] Mode change: {self._mode} -> {new_mode}")
-            self._mode = new_mode
-            self._gate.reset()
-            self._stop_sent = False
-            self._publish_status(f"Mode={self._mode}")
 
     def _delivery_id_cb(self, msg: String) -> None:
         """
@@ -349,11 +312,6 @@ class QRScannerNode(Node):
         processed  = preprocess(frame)
         detections = detect_qr(processed, min_confidence=self._min_confidence)
 
-        # ── Publish QR count (both phases) ────────────────────────────────────
-        count_msg      = Int32()
-        count_msg.data = len(detections)
-        self._pub_qr_count.publish(count_msg)
-
         # ── Dispatch to phase handler ─────────────────────────────────────────
         if self._mode == self.MODE_PHASE2:
             self._handle_phase2(detections)
@@ -367,8 +325,8 @@ class QRScannerNode(Node):
     def _handle_phase2(self, detections: list[dict]) -> None:
         """
         Phase 2: drone is hovering at 5 m above start zone QR.
-        Feed best detection into gate. On confirmation, store and publish
-        Delivery ID, switch to IDLE (FSM will activate PHASE5 later).
+        Feed best detection into gate. On confirmation, store the Delivery
+        ID, switch to IDLE and wake the blocking /perception/scan_qr call.
         """
         if self._delivery_id is not None:
             # Already confirmed — nothing more to do
@@ -381,14 +339,6 @@ class QRScannerNode(Node):
             self._delivery_id = store_delivery_id(self._gate.confirmed)
             self.get_logger().info(
                 f"[qr_scanner] [Phase 2] DELIVERY ID CONFIRMED: '{self._delivery_id}'"
-            )
-
-            # Publish to /delivery_id — FSM uses this as Phase 2 exit condition
-            out = String()
-            out.data = self._delivery_id
-            self._pub_delivery_id.publish(out)
-            self.get_logger().info(
-                f"[qr_scanner] [Phase 2] Published to /delivery_id: '{self._delivery_id}'"
             )
 
             self._publish_status(f"PHASE2_CONFIRMED:{self._delivery_id}")
@@ -422,19 +372,6 @@ class QRScannerNode(Node):
             )
             return
 
-        # ── Confidence-triggered movement stop ────────────────────────────────
-        if detections and not self._stop_sent:
-            best_conf = max(d["confidence"] for d in detections)
-            if best_conf >= self._stop_confidence:
-                stop_msg      = Bool()
-                stop_msg.data = True
-                self._pub_stop_move.publish(stop_msg)
-                self._stop_sent = True
-                self.get_logger().info(
-                    f"[qr_scanner] [Phase 5] Confidence {best_conf:.2f} >= "
-                    f"{self._stop_confidence} — STOP MOVEMENT published"
-                )
-
         # ── Match against Delivery ID ─────────────────────────────────────────
         matching = find_matching_qr(detections, self._delivery_id)
         gate_value = matching["data"] if matching else None
@@ -462,12 +399,6 @@ class QRScannerNode(Node):
                 heading_deg=heading,
                 cam_yaw_offset_deg=self._cam_yaw_offset,
             )
-
-            target = Point()
-            target.x = d_north
-            target.y = d_east
-            target.z = 0.0
-            self._pub_target.publish(target)
 
             # ── Publish "content|qr_lat|qr_lon" for mission_node ──────────────
             if self._current_gps[0] is not None:
@@ -509,15 +440,6 @@ class QRScannerNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
     # Helpers
     # ═════════════════════════════════════════════════════════════════════════
-
-    def _reset(self) -> None:
-        """Full state reset — call between mission runs."""
-        self._mode        = self.MODE_IDLE
-        self._delivery_id = None
-        self._stop_sent   = False
-        self._gate.reset()
-        self.get_logger().info("[qr_scanner] Reset — all state cleared.")
-        self._publish_status("RESET")
 
     def _publish_status(self, text: str) -> None:
         msg      = String()
