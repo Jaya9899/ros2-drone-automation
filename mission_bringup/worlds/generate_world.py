@@ -76,94 +76,47 @@ parts = []
 parts.append(box_visual_only("takeoff_landing_zone", 0, 0, 0.02, 4, 6, 0.02, (0.15,0.35,0.85,1)))
 
 
-# ---- corridor: 10 m long (x=4..14), two 3.5 m lanes, 10 ft (3.048 m) walls ----
-H = 10.0          # wall height
-LANE_WIDTH = 3.5
+# ---- two corridors: 10 m long (x=4..14), 5 ft (1.524 m) wide, 10 ft walls ----
+# Green strip on the ground at each entrance, blue at each exit (the banners'
+# ground markings). Corridor 1 (forward, +x) enters at x=4; corridor 2
+# (return, -x) enters at x=14.
+H = 3.048         # wall height (10 ft)
+LANE_WIDTH = 1.524
 WALL = 0.10
+STRIP = 1.0       # marker strip length along the corridor
 GROUND_TOP = 0.001
 ARENA_TOP = 0.016
-# --------------------------------------------------------
-# Two independent corridors
-# --------------------------------------------------------
-
+X0, X1 = 4.0, 14.0
 forward_y = 4.75
 return_y = -4.75
+lane_rgba = (0.6, 0.6, 0.6, 1)
+green = (0.1, 0.75, 0.15, 1)
+blue = (0.1, 0.25, 0.9, 1)
+wall_rgba = (0.55, 0.55, 0.55, 1)
 
-# coloured floors
-parts.append(box_visual_only(
-    "lane_forward_green",
-    9,
-    forward_y,
-    0.011,
-    10,
-    LANE_WIDTH,
-    0.02,
-    (0.15,0.6,0.2,1)
-))
+for name, y, entry_x, exit_x in (("forward", forward_y, X0, X1),
+                                 ("return", return_y, X1, X0)):
+    parts.append(box_visual_only(f"lane_{name}", (X0 + X1) / 2, y, 0.011,
+                                 X1 - X0, LANE_WIDTH, 0.02, lane_rgba))
+    step = 1 if exit_x > entry_x else -1
+    parts.append(box_visual_only(f"{name}_entry_green", entry_x - step * STRIP / 2, y,
+                                 0.013, STRIP, LANE_WIDTH, 0.02, green))
+    parts.append(box_visual_only(f"{name}_exit_blue", exit_x + step * STRIP / 2, y,
+                                 0.013, STRIP, LANE_WIDTH, 0.02, blue))
+    for side, dy in (("left", LANE_WIDTH / 2 + WALL / 2), ("right", -LANE_WIDTH / 2 - WALL / 2)):
+        parts.append(box_solid(f"{name}_{side}_wall", (X0 + X1) / 2, y + dy, H / 2,
+                               X1 - X0, WALL, H, wall_rgba))
 
-parts.append(box_visual_only(
-    "lane_return_orange",
-    9,
-    return_y,
-    0.011,
-    10,
-    LANE_WIDTH,
-    0.02,
-    (0.9,0.5,0.1,1)
-))
-
-wall_rgba=(0.55,0.55,0.55,1)
-
-# forward corridor walls
-parts.append(box_solid(
-    "forward_outer_wall",
-    9,
-    forward_y + LANE_WIDTH/2,
-    H/2,
-    10,
-    WALL,
-    H,
-    wall_rgba
-))
-
-parts.append(box_solid(
-    "forward_inner_wall",
-    9,
-    forward_y - LANE_WIDTH/2,
-    H/2,
-    10,
-    WALL,
-    H,
-    wall_rgba
-))
-
-# return corridor walls
-parts.append(box_solid(
-    "return_inner_wall",
-    9,
-    return_y + LANE_WIDTH/2,
-    H/2,
-    10,
-    WALL,
-    H,
-    wall_rgba
-))
-
-parts.append(box_solid(
-    "return_outer_wall",
-    9,
-    return_y - LANE_WIDTH/2,
-    H/2,
-    10,
-    WALL,
-    H,
-    wall_rgba
-))
-# ---- static obstacles in the RETURN (orange) lane ----
-obs = (0.05,0.05,0.05,1)
-parts.append(box_solid("obstacle_1", 7.0,  -4.0, 1.0, 0.3, 0.3, 2.0, obs))
-parts.append(box_solid("obstacle_2", 9.5,  -5.8, 1.0, 0.3, 0.3, 2.0, obs))
-parts.append(box_solid("obstacle_3", 11.5, -4.8, 1.25, 0.4, 0.4, 2.5, obs))
+# ---- static obstacles in the RETURN lane (30-40 % of the width, 0.4 m deep) ----
+# Matches the sitl_corridor_sim set: against one wall, against the other,
+# then centred (no side gap: climb over).
+obs = (0.05, 0.05, 0.05, 1)
+W2 = LANE_WIDTH / 2
+for i, (s_from_entry, centre, width, top) in enumerate(
+        ((3.0, W2 - 0.305, 0.61, 2.0), (6.5, -W2 + 0.23, 0.46, 2.0), (8.0, 0.0, 0.55, 2.0)), 1):
+    x = X1 - s_from_entry - 0.2           # return lane runs -x
+    # return lane: its LEFT (+ lateral, travelling -x) is world -y
+    parts.append(box_solid(f"obstacle_{i}", x, return_y - centre, top / 2, 0.4, width, top, obs))
 
 # ---- arena floor: 40 m (x=14..54) x 30 m (y=-15..15), green field ----
 parts.append(box_visual_only("arena_floor", 34, 0, 0.008, 40, 30, 0.01, (0.20,0.55,0.25,1)))

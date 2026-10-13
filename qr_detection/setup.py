@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='jaya9899',
     maintainer_email='jaya9899@todo.todo',
-    description='Downward-camera QR detection and ground projection for Mission 2',
+    description='Downward-camera QR detection, ground projection and corridor ground markers for Mission 2',
     license='MIT',
     extras_require={
         'test': [
@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'qr_scanner_node = qr_detection.qr_scanner_node:main',
+            'ground_marker_node = qr_detection.ground_marker_node:main',
         ],
     },
 )

@@ -7,9 +7,12 @@
 #     single-threaded executor, and with it every service response.)
 #   - The mission runs linearly in a worker thread (_run_mission). It calls
 #     services and sleep-polls their futures while the main thread spins.
-#   - Abort conditions (RC switch low, battery critical, obstacle sensor dead)
+#   - Abort conditions (RC switch low, FC left GUIDED, battery critical,
+#     obstacle sensor dead)
 #     are checked continuously by _tick() inside every wait, so the mission can
 #     be stopped mid-leg, not only between phases.
+#   - Failsafes (battery, fence, GCS/radio loss, EKF) are ArduPilot's job. When
+#     the FC switches out of GUIDED for any reason, the mission stops commanding.
 #
 # Usage:
 #   ros2 run mission_manager mission_node
@@ -38,6 +41,8 @@ class MissionAbort(Exception):
       'pilot'   — RC auto switch low: pilot takes over (LOITER).
       'battery' — battery critical: ArduPilot BATT_FS is primary; we only stop
                   commanding so we never fight the FC failsafe.
+      'fc'      — the FC left GUIDED in flight (its own failsafe or a pilot
+                  mode change): stop commanding so we never fight it.
       'failure' — companion-detected failure (sensor dead, leg failed, ...):
                   LAND if airborne, disarm/stay down if on the ground.
     """
@@ -89,6 +94,7 @@ class MissionNode(Node):
 
         self._abort = None              # (kind, reason) once requested
         self._airborne = False
+        self._landing = False           # we commanded LAND: mode change expected
         self._mission_complete = False
         self._qr_match = None           # (lat, lon) of the confirmed target QR
 
@@ -114,6 +120,8 @@ class MissionNode(Node):
 
     def _mavros_state_cb(self, msg: MavrosState):
         self.mavros_state = msg
+        if self._airborne and not self._landing and msg.mode != "GUIDED":
+            self._request_abort("fc", f"FC switched to {msg.mode}")
 
     def _gps_cb(self, msg: NavSatFix):
         if msg.status.status >= NavSatStatus.STATUS_FIX:
@@ -412,6 +420,7 @@ class MissionNode(Node):
             self.get_logger().error("[mission_node] Payload release NOT confirmed")
 
     def _land_and_wait(self):
+        self._landing = True
         if not mav.land(self):
             mav.land(self)          # one retry; LAND is the end of the line
         if not self._wait_for(lambda: not self._armed(), self.cfg.land_timeout_s,
@@ -450,7 +459,7 @@ class MissionNode(Node):
             self.sm.c2_complete()
             if not self._goto_and_wait(*self.home, self.cfg.cruise_altitude_m,
                                        self.cfg.arrival_tolerance_m, self.cfg.arrival_timeout_s,
-                                       self.cfg.corridor_speed_ms):
+                                       self.cfg.transit_speed_ms):
                 self.get_logger().warn("[mission_node] Home not reached in time — landing here")
 
             self.sm.home_reached()
@@ -469,6 +478,7 @@ class MissionNode(Node):
 
     def _handle_abort(self, a: MissionAbort):
         self.get_logger().error(f"[mission_node] MISSION ABORTED — {a}")
+        self._landing = True     # mode changes from here on are ours or the FC's
         self._stop_planner()
         try:
             if a.kind == "pilot":
@@ -483,6 +493,9 @@ class MissionNode(Node):
                     self.get_logger().error(
                         "[mission_node] Leaving control to ArduPilot battery failsafe "
                         "(BATT_FS_CRT_ACT). Make sure it is configured.")
+                elif a.kind == "fc":
+                    self.get_logger().error(
+                        "[mission_node] FC is in control — companion stopped commanding")
                 elif self._armed() and self._airborne:
                     mav.land(self)
                 elif self._armed():

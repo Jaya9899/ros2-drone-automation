@@ -65,6 +65,17 @@ def _setup(context, *args, **kwargs):
                              'mavlink_url': mavlink_url}],
     ))
 
+    # Corridor fit on the same depth stream (-> /corridor/perception, read by
+    # path_planner in the corridors).
+    nodes.append(Node(
+        package='obstacle_avoidance',
+        executable='corridor_perception_node',
+        name='corridor_perception_node',
+        output='screen',
+        parameters=[config],
+        remappings=builder_remaps,
+    ))
+
     # Coverage guard runs alongside the builder, consuming its scan + coverage.
     nodes.append(Node(
         package='obstacle_avoidance',

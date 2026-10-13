@@ -9,9 +9,10 @@
 # FC setup (do this in Mission Planner, the node cannot do it for you):
 #   SERVO<release_channel>_FUNCTION = 0   (DO_SET_SERVO is ignored on an
 #                                          output assigned to any function)
-#   SERVO<release_channel>_TRIM     = release_pwm_lock, so the FC holds the
-#                                     mechanism LOCKED from boot even before
-#                                     this node is running.
+#   SERVO<release_channel>_TRIM     = the LOCK PWM. The FC outputs trim on
+#                                     unassigned channels from boot, so it
+#                                     holds the mechanism locked; this node
+#                                     never sends a lock command.
 #   Check that output <release_channel> physically exists on the Pixhawk 6C
 #   Mini, or move release_channel to an output that does.
 #
@@ -40,11 +41,9 @@ class PayloadNode(Node):
 
         self.release_channel  = int(self.cfg.release_channel)
         self.release_pwm_open = int(self.cfg.release_pwm_open)
-        self.release_pwm_lock = int(self.cfg.release_pwm_lock)
         self.release_pause    = float(self.cfg.release_pause_s)
 
         self.is_released = False
-        self._locked = False
 
         # Service handler and client share a reentrant group so the client's
         # response can be processed by another executor thread while the
@@ -55,22 +54,9 @@ class PayloadNode(Node):
         self.create_service(Trigger, "/payload/release", self._handle_release,
                             callback_group=self._cb_group)
 
-        # Lock the mechanism as soon as MAVROS is reachable (it may start
-        # after us); retried every 2 s until confirmed.
-        self._lock_timer = self.create_timer(
-            2.0, self._try_lock, callback_group=self._cb_group)
-
         self.get_logger().info(
             f"[payload] Ready — /payload/release (ch={self.release_channel}, "
-            f"open={self.release_pwm_open}, lock={self.release_pwm_lock})")
-
-    def _try_lock(self):
-        if self._locked or self.is_released:
-            self._lock_timer.cancel()
-            return
-        if self._set_servo(self.release_channel, self.release_pwm_lock, wait_s=0.5):
-            self._locked = True
-            self._lock_timer.cancel()
+            f"open={self.release_pwm_open})")
 
     # -----------------------------------------------------------------------
     # Servo helper — sends MAVLink DO_SET_SERVO via MAVROS CommandLong

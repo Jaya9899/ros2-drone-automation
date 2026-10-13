@@ -27,6 +27,7 @@ from sensor_msgs.msg import Image, CameraInfo, LaserScan, Imu
 from std_msgs.msg import Float32
 
 from obstacle_avoidance import geometry as g
+from obstacle_avoidance.depth_image import DepthDecodeError, decode_depth
 
 
 class SectorBuilderNode(Node):
@@ -214,35 +215,17 @@ class SectorBuilderNode(Node):
 
     def _decode_depth(self, msg):
         """Step 1 — decode depth to metres, float32. Invalid -> NaN."""
-        enc = msg.encoding
-        if enc == '16UC1':
-            dtype, scale = np.uint16, 0.001            # millimetres -> metres
-        elif enc == '32FC1':
-            dtype, scale = np.float32, 1.0             # already metres
-        else:
-            if not self._logged_encoding_error:
-                self.get_logger().error(
-                    f"unsupported depth encoding '{enc}' "
-                    "(expected 16UC1 or 32FC1)")
-                self._logged_encoding_error = True
+        try:
+            return decode_depth(msg)
+        except DepthDecodeError as e:
+            if 'encoding' in str(e):
+                if not self._logged_encoding_error:
+                    self.get_logger().error(str(e))
+                    self._logged_encoding_error = True
+            else:
+                self.get_logger().warn(f'{e}; dropping frame',
+                                       throttle_duration_sec=2.0)
             return None
-
-        itemsize = np.dtype(dtype).itemsize
-        cols = msg.step // itemsize if msg.step else msg.width
-        raw = np.frombuffer(msg.data, dtype=dtype)
-        if raw.size < cols * msg.height:
-            self.get_logger().warn('short depth buffer; dropping frame',
-                                   throttle_duration_sec=2.0)
-            return None
-        raw = raw.reshape(msg.height, cols)[:, :msg.width]
-        if msg.is_bigendian:
-            raw = raw.byteswap()
-
-        z = raw.astype(np.float32) * scale
-        # z <= 0, NaN, inf are all "no reading".
-        bad = ~np.isfinite(z) | (z <= 0.0)
-        z[bad] = np.nan
-        return z
 
     # ----------------------------------------------------------- core maths
     def _process(self, z, stamp):

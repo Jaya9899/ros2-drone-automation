@@ -3,11 +3,12 @@
 <package format="3">
   <name>obstacle_avoidance</name>
   <version>0.0.0</version>
-  <description>Forward-facing OAK-D depth to ArduPilot proximity: sector builder and coverage guard (waypoints + BendyRuler; no reactive controller).</description>
+  <description>Forward-facing OAK-D depth: ArduPilot proximity (sector builder), sensor health (coverage guard) and corridor perception.</description>
   <maintainer email="jaya9899@todo.todo">jaya9899</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>mission_common</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>mavros_msgs</depend>

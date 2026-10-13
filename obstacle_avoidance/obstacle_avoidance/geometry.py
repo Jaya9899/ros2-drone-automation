@@ -144,6 +144,13 @@ def pitch_from_quaternion(x, y, z, w):
     return float(np.arcsin(sinp))
 
 
+def roll_from_quaternion(x, y, z, w):
+    """Right-wing-down-POSITIVE roll (radians) of a FLU-body -> ENU-world
+    quaternion (rotation about body +x; in FLU that lifts the LEFT side,
+    i.e. lowers the right wing — the aerospace sign)."""
+    return float(np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y)))
+
+
 def horizon_row(cy, fy, pitch):
     """Image row v where the world horizon appears, given nose-up pitch.
 

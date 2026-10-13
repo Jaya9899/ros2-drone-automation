@@ -3,7 +3,7 @@
 <package format="3">
   <name>qr_detection</name>
   <version>0.1.0</version>
-  <description>Downward-camera QR detection and ground projection for Mission 2</description>
+  <description>Downward-camera QR detection, ground projection and corridor ground markers for Mission 2</description>
   <maintainer email="jaya9899@todo.todo">jaya9899</maintainer>
   <license>MIT</license>
 

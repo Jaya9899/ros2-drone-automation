@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='jaya9899',
     maintainer_email='jaya9899@todo.todo',
-    description='Mission 2 state machine plus safety, telemetry, SITL QR simulator and flight-primitive test nodes.',
+    description='Mission 2 state machine plus SITL QR simulator and flight-primitive test nodes.',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -25,8 +25,6 @@ setup(
     entry_points={
         'console_scripts': [
             'mission_node = mission_manager.mission_node:main',
-            'safety_monitor = mission_manager.safety_monitor:main',
-            'telemetry_node = mission_manager.telemetry_node:main',
             'sitl_qr_simulator = mission_manager.sitl_qr_simulator:main',
             'flight_primitives = mission_manager.flight_primitives:main',
         ],

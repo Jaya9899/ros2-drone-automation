@@ -15,9 +15,10 @@
 # FC-side settings this stack relies on (set in Mission Planner):
 #   BATT_LOW_VOLT 14.0 / BATT_CRT_VOLT 13.6, BATT_FS_LOW_ACT, BATT_FS_CRT_ACT
 #   FENCE_* + arena polygon + red-zone exclusion polygons uploaded
-#   PRX1_TYPE 2, AVOID_*/OA_* (obstacle_avoidance/params/, OA_MARGIN_MAX 0.6),
-#   GUID_OPTIONS / WP_SPD are written by path_planner at runtime, SERVO10_FUNCTION 0,
-#   SERVO10_TRIM = release_pwm_lock, RC7 = mission auto switch
+#   PRX1_TYPE 2, AVOID_* (obstacle_avoidance/params/stage5_6_corridor.param),
+#   OA_TYPE 0 and GUID_OPTIONS 0 (plain position control in GUIDED; the
+#   corridors are flown by path_planner, not BendyRuler), SERVO10_FUNCTION 0,
+#   SERVO10_TRIM = lock PWM, RC7 = mission auto switch
 
 # ─── Mission Node ─────────────────────────────────────────────────
 mission_node:
@@ -26,9 +27,9 @@ mission_node:
     drop_altitude_m: 5.0
     cruise_altitude_m: 5.0
     # Speeds for mission_node's own gotos: fly-over-QR uses arena speed,
-    # homing uses corridor (clean) speed
+    # homing uses transit speed
     arena_speed_ms: 1.5
-    corridor_speed_ms: 2.0
+    transit_speed_ms: 2.0
     # Timeouts
     service_timeout_s: 10.0
     altitude_timeout_s: 30.0
@@ -62,19 +63,6 @@ mission_node:
     sensor_preflight_timeout_s: 30.0
     sensor_fail_timeout_s: 10.0
 
-# ─── Safety Monitor ──────────────────────────────────────────────
-safety_monitor:
-  ros__parameters:
-    battery_critical_v: 13.6
-    battery_warning_v: 14.0
-    oak_warning_dist_m: 1.5
-    safety_check_rate_hz: 5.0
-    obstacle_warn_throttle_s: 1.0
-    # Geofence polygon (flat list: lat0,lon0, lat1,lon1, ...) — logged for
-    # cross-checking; the fence itself is uploaded on the FC.
-    geofence_points: [12.97100, 77.59400, 12.97100, 77.59500,
-                      12.97220, 77.59500, 12.97220, 77.59400]
-
 # ─── Path Planner ─────────────────────────────────────────────────
 path_planner_node:
   ros__parameters:
@@ -82,8 +70,7 @@ path_planner_node:
     arena_height_m: 30.0
     cruise_altitude_m: 5.0
     # Leg speeds (m/s), applied with DO_CHANGE_SPEED at the start of each leg
-    corridor_speed_ms: 2.0        # corridor 1 (clean)
-    corridor_obs_speed_ms: 1.0    # corridor 2 (obstacles) — written to FC WP_SPD
+    transit_speed_ms: 2.0         # open-air hops (to a corridor's entry point)
     arena_speed_ms: 1.5
     origin_lat: 12.9716
     origin_lon: 77.5946
@@ -91,12 +78,15 @@ path_planner_node:
     down_cam_hfov_deg: 66.0
     strip_overlap: 0.20           # fraction of footprint shared by adjacent strips
     goto_publish_count: 20
-    # Corridor 1 (clean) — PLACEHOLDER
-    corridor1_waypoints_x: [0.0, 2.5, 5.0, 7.5, 10.0]
-    corridor1_waypoints_y: [15.0, 15.0, 15.0, 15.0, 15.0]
-    # Corridor 2 (static obstacles), a different corridor — PLACEHOLDER
-    corridor2_waypoints_x: [10.0, 7.5, 5.0, 2.5, 0.0]
-    corridor2_waypoints_y: [-5.0, -5.0, -5.0, -5.0, -5.0]
+    # Corridors: straight, 5 ft (1.524 m) wide. Only the FIRST and LAST point
+    # are used: first = on the centreline 2-3 m BEFORE the mouth (the vehicle
+    # descends there and must see both walls ahead), last = just past the exit.
+    # The leg ends on the blue exit marker; the last point is the fallback
+    # length. PLACEHOLDERS — survey both on competition day.
+    corridor1_waypoints_x: [-3.0, 13.0]
+    corridor1_waypoints_y: [15.0, 15.0]
+    corridor2_waypoints_x: [13.0, -3.0]
+    corridor2_waypoints_y: [-5.0, -5.0]
     red_zone_1_x: [24.0, 36.0, 36.0, 24.0]
     red_zone_1_y: [12.0, 12.0, 22.0, 22.0]
     red_zone_2_x: [10.0, 15.0, 12.5]
@@ -105,16 +95,32 @@ path_planner_node:
     red_zone_3_y: [20.0, 20.0, 22.0, 22.0, 25.0, 25.0]
     red_zone_buffer_m: 0.5
     arena_edge_margin_m: 1.0      # lawnmower stays this far inside the arena edge
-    corridor_entry_x: 0.0
-    corridor_entry_y: 15.0
     corridor_timeout_s: 120.0
     lawnmower_timeout_s: 600.0
     mavros_arrival_tolerance_m: 2.0
-    # Corridor 2 flies with BendyRuler: the planner sets FC GUID_OPTIONS bit 6
-    # for that leg only (and WP_SPD = corridor_obs_speed_ms). Put any other
-    # GUID_OPTIONS bits you want in guided_options_base.
-    corridor2_bendyruler: true
-    guided_options_base: 0
+    # ── Corridor following (path_planner/corridor_follow.py) ──
+    corridor_altitude_m: 1.5      # PLACEHOLDER: below the wall tops, above
+                                  # ground effect; obstacles must reach the
+                                  # depth slice (camera -0.35..+0.50 m) to be seen
+    corridor_max_altitude_m: 3.0  # climb-over ceiling. Keep BELOW the wall
+                                  # tops: above them the walls leave the slice
+                                  # and the leg holds, then lands.
+    corridor_follow_speed_ms: 0.5 # stage 0.3 -> 0.5 on hardware
+    corridor_rate_hz: 5.0
+    corridor_lookahead_m: 0.8
+    corridor_entry_timeout_s: 15.0
+    corridor_exit_clearance_m: 1.0
+    corridor_max_overrun_m: 3.0
+    corridor_exit_run_m: 3.0      # fly out blind only when the walls' end is <= this ahead
+    corridor_exit_window_m: 3.0   # a measured wall end counts only this near the surveyed end
+    drone_width_m: 0.55           # PLACEHOLDER: MEASURE tip-to-tip incl. props
+    side_clearance_m: 0.10        # passing needs drone_width + 2 x this
+    obstacle_stop_dist_m: 1.0     # wait this far from an obstacle until lined up
+    obstacle_length_m: 1.0        # assumed depth of an obstacle (face only is seen)
+    climb_clearance_m: 0.30
+    body_below_camera_m: 0.15     # PLACEHOLDER: camera to lowest point (legs)
+    require_corridor_perception: true   # false = GPS centreline only (SITL)
+    corridor_width_m: 1.524       # used only when perception is off
     # Obstacle sensor gating (hold / back off / fail)
     require_avoidance_sensor: true
     sensor_fail_timeout_s: 10.0
@@ -129,10 +135,18 @@ payload_node:
     release_pwm_lock: 1900
     release_pause_s: 1.0
 
-# ─── Telemetry Node ───────────────────────────────────────────────
-telemetry_node:
+# ─── Corridor ground markers (qr_detection ground_marker_node) ───
+# Downward camera: green = corridor entrance, blue = exit. HSV in OpenCV
+# units [h_lo, h_hi, s_min, v_min] (h 0..179). TUNE ON SITE: hover over each
+# marking and over the grass, read the logged fractions; grass must stay well
+# under marker_min_fraction.
+ground_marker_node:
   ros__parameters:
-    publish_rate_hz: 2.0
+    marker_rate_hz: 10.0
+    marker_min_fraction: 0.20
+    marker_gate_frames: 3
+    green_hsv: [40, 85, 120, 60]
+    blue_hsv: [95, 130, 120, 50]
 
 # ─── SITL QR Simulator ───────────────────────────────────────────
 sitl_qr_simulator:
@@ -141,6 +155,29 @@ sitl_qr_simulator:
     qr_location_lon: 77.5947
     qr_content: "QR_TARGET_DEMO_ID"
     detection_radius_m: 10.0
+
+# ─── SITL corridor simulator (obstacle_avoidance, SITL only) ──────
+# Corridor waypoints and origin MUST match path_planner_node above.
+# Obstacles: [s_from_mouth, lateral_centre(+left), width, top_height, ...]
+sitl_corridor_sim:
+  ros__parameters:
+    origin_lat: 12.9716
+    origin_lon: 77.5946
+    corridor1_waypoints_x: [-3.0, 13.0]
+    corridor1_waypoints_y: [15.0, 15.0]
+    corridor2_waypoints_x: [13.0, -3.0]
+    corridor2_waypoints_y: [-5.0, -5.0]
+    corridor1_obstacles: [0.0]          # clean
+    # 40 % against the left wall (pass right), 30 % against the right wall
+    # (pass left), then a centred one too tall to pass beside (climb over).
+    corridor2_obstacles: [3.0, 0.457, 0.61, 2.0,
+                          6.5, -0.533, 0.46, 2.0,
+                          10.0, 0.0, 0.55, 2.0]
+    corridor_width_m: 1.524
+    wall_height_m: 4.0
+    mouth_offset_m: 2.5
+    exit_offset_m: 1.0
+    gps_offset_m: 0.5                   # EKF vs truth: GPS-only flight would scrape a wall
 
 # ─── QR Scanner Node (qr_detection) ────────────────────────────────
 qr_scanner_node:

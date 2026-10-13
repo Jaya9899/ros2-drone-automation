@@ -3,10 +3,11 @@
 #   ros2 launch mission_bringup mission.launch.py launch_mavros:=true \
 #       fcu_url:=/dev/ttyAMA0:921600 launch_camera:=true
 #
-# Starts: MAVROS (optional), safety monitor, telemetry, path planner, payload,
-# QR scanner, the OAK-D Lite driver + obstacle_avoidance obstacle pipeline
-# (sector_builder -> OBSTACLE_DISTANCE to ArduPilot, coverage_guard health
-# Bools), the RPi Camera 3 driver (optional), and finally the mission node.
+# Starts: MAVROS (optional), path planner, payload, QR scanner, corridor
+# ground-marker detector (downward camera), the OAK-D Lite driver +
+# obstacle_avoidance pipeline (sector_builder -> OBSTACLE_DISTANCE to
+# ArduPilot, coverage_guard health Bools, corridor_perception for the
+# corridors), the RPi Camera 3 driver (optional), and finally the mission node.
 #
 # Pi 5 <-> Pixhawk 6C Mini on TELEM2 (GPIO14/15 UART0):
 #   /boot/firmware/config.txt: dtparam=uart0=on  (gives /dev/ttyAMA0 on Pi 5)
@@ -70,11 +71,10 @@ def generate_launch_description():
             parameters=[mission_params, *extra_params],
         )
 
-    safety_monitor = mission_node_of("mission_manager", "safety_monitor")
-    telemetry_node = mission_node_of("mission_manager", "telemetry_node")
     path_planner_node = mission_node_of("path_planner", "path_planner_node")
     payload_node = mission_node_of("payload", "payload_node")
     qr_scanner_node = mission_node_of("qr_detection", "qr_scanner_node")
+    ground_marker_node = mission_node_of("qr_detection", "ground_marker_node")
     mission_node = mission_node_of("mission_manager", "mission_node")
 
     # ================================================================
@@ -139,11 +139,10 @@ def generate_launch_description():
         camera_arg,
 
         mavros_launch,
-        safety_monitor,
-        telemetry_node,
         payload_node,
         path_planner_node,
         qr_scanner_node,
+        ground_marker_node,
         down_camera,
         oakd_launch,
         avoidance_launch,

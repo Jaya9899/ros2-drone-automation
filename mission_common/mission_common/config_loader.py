@@ -47,8 +47,9 @@ def load_mission_config(node) -> MissionConfig:
     cfg.cruise_altitude_m     = _declare(node, "cruise_altitude_m", 5.0)
 
     # ── Speeds (sent to ArduPilot with DO_CHANGE_SPEED per leg) ──
-    cfg.corridor_speed_ms     = _declare(node, "corridor_speed_ms", 2.0)
-    cfg.corridor_obs_speed_ms = _declare(node, "corridor_obs_speed_ms", 1.0)
+    # transit: open-air hops (to a corridor's entry point, homing). Inside a
+    # corridor path_planner uses its own corridor_follow_speed_ms.
+    cfg.transit_speed_ms      = _declare(node, "transit_speed_ms", 2.0)
     cfg.arena_speed_ms        = _declare(node, "arena_speed_ms", 1.5)
 
     # ── GPS Origin of the local arena frame ──────────────────────
@@ -64,7 +65,6 @@ def load_mission_config(node) -> MissionConfig:
     # ── Battery (4S, under load). ArduPilot BATT_FS_* is the primary
     #    failsafe; the companion only stops commanding the mission. ──
     cfg.battery_critical_v    = _declare(node, "battery_critical_v", 13.6)
-    cfg.battery_warning_v     = _declare(node, "battery_warning_v", 14.0)
 
     # ── Timeouts & Tolerances ────────────────────────────────────
     cfg.service_timeout_s     = _declare(node, "service_timeout_s", 10.0)
@@ -98,31 +98,24 @@ def load_mission_config(node) -> MissionConfig:
 
     # ── Obstacle sensor health (obstacle_avoidance coverage_guard) ─
     # sensor_live False -> hold; still False after sensor_fail_timeout_s -> LAND.
-    # coverage_ok False in corridor 2 -> hold; after coverage_backoff_after_s
-    # back off coverage_backoff_m; still low after sensor_fail_timeout_s -> LAND.
+    # In a corridor, no valid corridor fit -> hold; after
+    # coverage_backoff_after_s back off coverage_backoff_m along the corridor;
+    # still lost after sensor_fail_timeout_s -> LAND.
     cfg.require_avoidance_sensor  = _declare(node, "require_avoidance_sensor", True)
     cfg.sensor_preflight_timeout_s = _declare(node, "sensor_preflight_timeout_s", 30.0)
     cfg.sensor_fail_timeout_s     = _declare(node, "sensor_fail_timeout_s", 10.0)
     cfg.coverage_backoff_after_s  = _declare(node, "coverage_backoff_after_s", 3.0)
     cfg.coverage_backoff_m        = _declare(node, "coverage_backoff_m", 1.0)
 
-    # ── Safety Monitor Specific ──────────────────────────────────
-    cfg.safety_check_rate_hz     = _declare(node, "safety_check_rate_hz", 5.0)
-    cfg.oak_warning_dist_m       = _declare(node, "oak_warning_dist_m", 1.5)
-    cfg.obstacle_warn_throttle_s = _declare(node, "obstacle_warn_throttle_s", 1.0)
-
     # ── Path Planner Specific ────────────────────────────────────
     cfg.corridor_timeout_s          = _declare(node, "corridor_timeout_s", 120.0)
     cfg.lawnmower_timeout_s         = _declare(node, "lawnmower_timeout_s", 600.0)
     cfg.mavros_arrival_tolerance_m  = _declare(node, "mavros_arrival_tolerance_m", 2.0)
-    cfg.corridor_entry_x            = _declare(node, "corridor_entry_x", 0.0)
-    cfg.corridor_entry_y            = _declare(node, "corridor_entry_y", 15.0)
     cfg.red_zone_buffer_m           = _declare(node, "red_zone_buffer_m", 0.5)
 
     # ── Payload Specific ─────────────────────────────────────────
     cfg.release_channel     = _declare(node, "release_channel", 10)
     cfg.release_pwm_open    = _declare(node, "release_pwm_open", 1100)
-    cfg.release_pwm_lock    = _declare(node, "release_pwm_lock", 1900)
     cfg.release_pause_s     = _declare(node, "release_pause_s", 1.0)
 
     return cfg

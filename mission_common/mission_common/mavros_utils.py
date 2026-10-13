@@ -273,6 +273,7 @@ def goto(
     altitude_m: float,
     publish_count: int = 20,
     yaw_enu: float | None = None,
+    log: bool = True,
 ) -> bool:
     """
     Stream a GlobalPositionTarget to /mavros/setpoint_raw/global so GUIDED
@@ -285,7 +286,9 @@ def goto(
 
     The publisher is created once and cached on the node (``node._goto_pub``)
     so DDS discovery is not repeated per call; the target is streamed for
-    publish_count * 0.1 s so ArduPilot reliably latches it.
+    publish_count * 0.1 s so ArduPilot reliably latches it. A caller that
+    streams its own targets (corridor following, 5 Hz) passes publish_count=1
+    and log=False.
     """
     from mavros_msgs.msg import GlobalPositionTarget
 
@@ -322,6 +325,8 @@ def goto(
         pub.publish(msg)
         time.sleep(0.1)
 
+    if not log:
+        return True
     node.get_logger().info(
         f"[mavros_utils] Goto sent: lat={lat:.7f}, lon={lon:.7f}, "
         f"alt={altitude_m:.1f} m"

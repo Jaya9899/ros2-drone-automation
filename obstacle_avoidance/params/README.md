@@ -11,49 +11,51 @@ its parameters is meaningless.
 | `stage0_bench.param` | 0 + GPS survey | `LOG_DISARMED=1` only (powered, never armed) |
 | `stage1_proximity.param` | 1 | MAVLink proximity input only (display, not action) |
 | `stage2_simple_avoidance.param` | 2 | + simple avoidance (Loiter/AltHold test instrument) |
-| `stage5_6_bendyruler.param` | 5, 6 | + BendyRuler path planning + GCS failsafe = Land |
+| `stage5_6_corridor.param` | 5, 6 | OA off, `GUID_OPTIONS 0`, simple avoidance for pilot takeover, GCS failsafe = Land |
 
 ## Loading
 
 MAVProxy:
 ```
-param load params/stage5_6_bendyruler.param
+param load params/stage5_6_corridor.param
 reboot
 ```
 
 MAVROS:
 ```
-ros2 run mavros mavparam load params/stage5_6_bendyruler.param
+ros2 run mavros mavparam load params/stage5_6_corridor.param
 ```
 
-## The values that are deliberately not 2.0
+## Why ArduPilot's path planner is off in the corridors
 
-`AVOID_MARGIN` and `OA_MARGIN_MAX` are both **0.6 m**. BendyRuler only passes
-between a wall and an obstacle when the gap is at least 2 × margin. The corridor
-is 3.5 m wide: with 1.2 m a centred 0.8 m obstacle (1.35 m clear either side)
-blocks the leg; with 0.6 m it passes. The cost is flying ~0.6 m from walls and
-obstacles. Obstacle sizes are unknown until the venue — revisit this number
-(and only this number) when they are known.
+The corridors are 5 ft (1.524 m) wide with obstacles of 30–40 % of the width.
+BendyRuler passes between a wall and an obstacle only when the gap is at least
+2 × `OA_MARGIN_MAX`. The free gap is at most ~0.9–1.1 m (obstacle against a
+wall) or ~0.45 m each side (centred), so the margin would have to be under
+0.45 m — less than the vehicle's half span plus position error — and BendyRuler
+cannot fly over an obstacle either. So `OA_TYPE 0`, and `path_planner` flies the
+corridor from the OAK-D corridor fit (`corridor_perception_node`): centring,
+picking the free side, or climbing over (see `path_planner/corridor_follow.py`).
 
-## BendyRuler in GUIDED needs GUID_OPTIONS bit 6
+`GUID_OPTIONS` must be **0**. With bit 6 (64) set, GUIDED position targets go
+through the waypoint navigator at `WP_SPD` and ignore `DO_CHANGE_SPEED`.
 
-ArduPilot 4.7.1 GUIDED flies position targets with the plain position
-controller unless `GUID_OPTIONS` bit 6 (64) is set; only the waypoint navigator
-runs BendyRuler. `path_planner` sets bit 6 for corridor 2 and clears it after,
-so leave `GUID_OPTIONS` at 0 on the FC (or put extra bits in the planner's
-`guided_options_base`).
+## AVOID_MARGIN is 0.4
 
-## WP_SPD is staged (it replaced WPNAV_SPEED)
+Simple avoidance only acts when the pilot flies (Loiter/AltHold, e.g. after an
+RC takeover in a corridor); it is not applied to GUIDED position targets. The
+walls are 0.76 m from the centreline, so 0.6 would leave the pilot ~0.3 m of
+lateral room. `stage2_simple_avoidance.param` keeps 0.6 for the bench box test.
 
-4.7 renamed `WPNAV_SPEED` (cm/s) to `WP_SPD` (**m/s**); loading an old file with
-`WPNAV_SPEED` fails on that line. With bit 6 set, `WP_SPD` is the corridor-2
-speed — `DO_CHANGE_SPEED` is overwritten on every new target — so the planner
-writes `corridor_obs_speed_ms` into it at the start of the leg. Stage it on
-hardware through that parameter: 0.3 → 0.6 → 1.0 m/s, re-running the box test
-after each change; the **first corridor flight is 0.3**.
+## Corridor speed is staged
+
+`corridor_follow_speed_ms` (mission_params.yaml) is the speed inside the
+corridors, sent with `DO_CHANGE_SPEED`. Stage it on hardware: **0.3** for the
+first corridor flight, then 0.5.
 
 ## Two subsystems, one trap
 
 `AVOID_*` (simple avoidance) only acts horizontally in AltHold/Loiter. `OA_*`
-(BendyRuler) is the AUTO/GUIDED path planner. They read the same proximity data
-but are independent — confirm which margin is moving before tuning it.
+(BendyRuler) is the AUTO/GUIDED path planner, which this mission does not use.
+They read the same proximity data but are independent — confirm which one is
+active before tuning.
