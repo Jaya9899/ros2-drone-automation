@@ -55,5 +55,8 @@
       i_width: 640                # MUST match the mono output — see header note.
       i_height: 480               # These are the camera_info dims, not left.i_*.
       i_subpixel: false           # costs bandwidth; 6 m max report doesn't need it
-      i_lr_check: true            # rejects occlusion-edge fliers — cheap, worth it
+      i_lr_check: true
+      i_stereo_conf_threshold: 200   # stricter: drops low-confidence matches
+      i_enable_speckle_filter: true  # removes small noisy blobs
+      i_depth_filter_size: 5         # 5x5 median filter            # rejects occlusion-edge fliers — cheap, worth it
       i_extended_disparity: false
